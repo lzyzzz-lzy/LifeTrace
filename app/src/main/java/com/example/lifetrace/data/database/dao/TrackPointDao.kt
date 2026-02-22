@@ -1,0 +1,23 @@
+// TrackPointDao.kt
+package com.example.lifetrace.data.database.dao
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.Query
+import com.example.lifetrace.data.database.entity.TrackPointEntity
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface TrackPointDao {
+    // 插入轨迹点
+    @Insert
+    suspend fun insertTrackPoint(trackPointEntity: TrackPointEntity)
+
+    // 根据TripId获取轨迹点
+    @Query("SELECT * FROM track_point WHERE tripId = :tripId ORDER BY timestamp ASC")
+    suspend fun getTrackPointsByTripId(tripId: Long): List<TrackPointEntity>
+
+    // 删除指定Trip的轨迹点
+    @Query("DELETE FROM track_point WHERE tripId = :tripId")
+    suspend fun deleteTrackPointsByTripId(tripId: Long)
+}
