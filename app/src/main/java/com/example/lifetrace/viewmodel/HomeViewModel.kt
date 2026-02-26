@@ -2,14 +2,14 @@ package com.example.lifetrace.viewmodel
 
 import android.content.Context
 import android.content.Intent
-import android.icu.text.CaseMap
+import android.location.Location
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.MemoryType
-import com.example.lifetrace.data.database.entity.TripEntity
 import com.example.lifetrace.data.database.entity.TripStatus
 import com.example.lifetrace.data.database.repository.MemoryNodeRepository
+import com.example.lifetrace.data.database.repository.TrackPointRepository
 import com.example.lifetrace.data.database.repository.TripRepository
 import com.example.lifetrace.service.TripRecordingService
 import com.example.lifetrace.state.HomeUiState
@@ -17,6 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -24,111 +25,107 @@ class HomeViewModel(
     private val tripRepository: TripRepository,
     private val memoryNodeRepository: MemoryNodeRepository,
     private val mapViewModel: MapViewModel,
-): ViewModel() {
-    //State机制规范管理，私有可变流，公开不可变流
+    private val trackPointRepository: TrackPointRepository,
+) : ViewModel() {
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState
 
     private var timerJob: Job? = null
+    private var distanceJob: Job? = null
 
-    //初始化
     init {
         restoreTripIfNeed()
     }
 
-    //检查是否有未结束trip
     private fun restoreTripIfNeed() {
         viewModelScope.launch {
             val trip = tripRepository.getCurrentTrip()
-            if(trip != null) {
+            if (trip != null) {
+                bindTripData(trip.tripId)
+
                 _uiState.value = HomeUiState(
                     activeTrip = trip,
                     isRecording = trip.status == TripStatus.RECORDING,
                     isPaused = trip.status == TripStatus.PAUSE,
                     isLoading = false,
-                    timeRefreshTick = 0L // 新增
+                    timeRefreshTick = 0L
                 )
-                mapViewModel.onAppStart(hasActiveTrip = true)
+
+                if (trip.status == TripStatus.RECORDING) {
+                    startTimer()
+                    mapViewModel.returnToRecording()
+                } else {
+                    mapViewModel.enterPausedRecording()
+                }
             } else {
                 _uiState.value = HomeUiState(
                     activeTrip = null,
                     isRecording = false,
                     isPaused = false,
                     isLoading = false,
-                    timeRefreshTick = 0L // 新增
+                    timeRefreshTick = 0L
                 )
                 mapViewModel.onAppStart(hasActiveTrip = false)
             }
         }
     }
 
-    //启动计时器
     private fun startTimer() {
         timerJob?.cancel()
-
         timerJob = viewModelScope.launch {
             var tick = 0L
             while (true) {
                 delay(1000)
                 tick++
-                // 关键：更新 timeRefreshTick，值每次都变，必触发状态通知
                 _uiState.update { it.copy(timeRefreshTick = tick) }
             }
         }
     }
 
-
-    //开始新旅途
     fun startTrip(context: Context, title: String) {
         viewModelScope.launch {
             val trip = tripRepository.startNewTrip(title)
+            bindTripData(trip.tripId)
+
             _uiState.value = HomeUiState(
                 activeTrip = trip,
                 isRecording = true,
                 isPaused = false,
                 isLoading = false,
-                timeRefreshTick = 0L // 新增
+                timeRefreshTick = 0L
             )
+
             mapViewModel.returnToRecording()
-
-            startRecordingService(context = context)  //开始定位
-
+            startRecordingService(context)
             startTimer()
         }
     }
 
-    //暂停旅途
     fun pauseTrip(context: Context) {
-        val trip = _uiState.value.activeTrip?: return //当前没有trip则不存在暂停
+        val trip = _uiState.value.activeTrip ?: return
         viewModelScope.launch {
             val now = System.currentTimeMillis()
             val pauseTrip = trip.copy(
-                accumulatedDuration = trip.accumulatedDuration +
-                        (now - (trip.lastResumeTime ?: now)),
+                accumulatedDuration = trip.accumulatedDuration + (now - (trip.lastResumeTime ?: now)),
                 lastResumeTime = null,
                 status = TripStatus.PAUSE
             )
             tripRepository.updateTrip(pauseTrip)
-
-            stopRecordingService(context = context) //暂停定位
-
+            stopRecordingService(context)
             timerJob?.cancel()
 
             _uiState.value = _uiState.value.copy(
                 activeTrip = pauseTrip,
                 isRecording = false,
                 isPaused = true,
-                timeRefreshTick = _uiState.value.timeRefreshTick + 1 // 新增，确保暂停时刷新
+                timeRefreshTick = _uiState.value.timeRefreshTick + 1
             )
+            mapViewModel.enterPausedRecording()
         }
     }
 
-    //继续旅程
-    // HomeViewModel.kt
-
-    // 1. 恢复旅程时，确保 lastResumeTime 不为空
     fun resumeTrip(context: Context) {
-        val trip = _uiState.value.activeTrip?: return
+        val trip = _uiState.value.activeTrip ?: return
         viewModelScope.launch {
             val now = System.currentTimeMillis()
             val resumeTrip = trip.copy(
@@ -137,47 +134,57 @@ class HomeViewModel(
             )
             tripRepository.updateTrip(resumeTrip)
 
-            startRecordingService(context = context)
+            bindTripData(resumeTrip.tripId)
+            startRecordingService(context)
 
             _uiState.value = _uiState.value.copy(
                 activeTrip = resumeTrip,
                 isRecording = true,
                 isPaused = false,
-                timeRefreshTick = _uiState.value.timeRefreshTick + 1 // 新增，确保继续时刷新
+                timeRefreshTick = _uiState.value.timeRefreshTick + 1
             )
-
-            startTimer() // 重启定时器
+            mapViewModel.returnToRecording()
+            startTimer()
         }
     }
 
-    // 2. ViewModel 销毁时停止定时器，避免内存泄漏
-    override fun onCleared() {
-        super.onCleared()
-        timerJob?.cancel()
-    }
-
-    // 3. 结束旅程时停止定时器
     fun finishTrip(context: Context) {
-        val trip = _uiState.value.activeTrip?: return
+        val trip = _uiState.value.activeTrip ?: return
         viewModelScope.launch {
+            val now = System.currentTimeMillis()
+            val finalAccumulatedDuration = if (trip.status == TripStatus.RECORDING) {
+                trip.accumulatedDuration + (now - (trip.lastResumeTime ?: now))
+            } else {
+                trip.accumulatedDuration
+            }
+
             val endTrip = trip.copy(
                 status = TripStatus.FINISHED,
-                endTime = System.currentTimeMillis()
+                endTime = now,
+                accumulatedDuration = finalAccumulatedDuration,
+                lastResumeTime = null,
             )
             tripRepository.updateTrip(endTrip)
 
-            timerJob?.cancel() // 新增：停止定时器
+            timerJob?.cancel()
+            stopRecordingService(context)
 
-            stopRecordingService(context = context)
+            clearTripDataBinding()
 
             _uiState.value = _uiState.value.copy(
                 activeTrip = null,
                 isRecording = false,
                 isPaused = false,
-                timeRefreshTick = 0L // 新增
+                timeRefreshTick = 0L
             )
             mapViewModel.enterExplore()
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        timerJob?.cancel()
+        distanceJob?.cancel()
     }
 
     fun togglePanel() {
@@ -186,14 +193,14 @@ class HomeViewModel(
         )
     }
 
-    fun addMemoryNode() {
+    fun addMemoryNode(latitude: Double, longitude: Double) {
         val trip = _uiState.value.activeTrip ?: return
 
         viewModelScope.launch {
             val node = MemoryNodeEntity(
                 tripId = trip.tripId,
-                latitude = 0.0, // TODO 定位
-                longitude = 0.0,
+                latitude = latitude,
+                longitude = longitude,
                 timestamp = System.currentTimeMillis(),
                 text = "",
                 contentUrl = "",
@@ -203,17 +210,47 @@ class HomeViewModel(
         }
     }
 
-    fun startRecordingService(context: Context) {
+    private fun bindTripData(tripId: Long) {
+        trackPointRepository.setCurrentTripId(tripId)
+        mapViewModel.bindCurrentTrip(tripId)
+
+        distanceJob?.cancel()
+        distanceJob = viewModelScope.launch {
+            trackPointRepository.observeCurrentTrackPoints().collectLatest { points ->
+                val distance = calculateDistanceMeters(points)
+                _uiState.update { it.copy(distanceMeters = distance) }
+            }
+        }
+    }
+
+    private fun clearTripDataBinding() {
+        distanceJob?.cancel()
+        distanceJob = null
+        trackPointRepository.clearCurrentTripId()
+        mapViewModel.clearCurrentTripBinding()
+        _uiState.update { it.copy(distanceMeters = 0f) }
+    }
+
+    private fun calculateDistanceMeters(points: List<com.example.lifetrace.data.database.entity.TrackPointEntity>): Float {
+        if (points.size < 2) return 0f
+        var total = 0f
+        for (i in 1 until points.size) {
+            val prev = points[i - 1]
+            val curr = points[i]
+            val result = FloatArray(1)
+            Location.distanceBetween(prev.latitude, prev.longitude, curr.latitude, curr.longitude, result)
+            total += result.firstOrNull() ?: 0f
+        }
+        return total
+    }
+
+    private fun startRecordingService(context: Context) {
         val intent = Intent(context, TripRecordingService::class.java)
         context.startForegroundService(intent)
     }
 
-    fun stopRecordingService(context: Context) {
+    private fun stopRecordingService(context: Context) {
         val intent = Intent(context, TripRecordingService::class.java)
         context.stopService(intent)
-    }
-
-    fun onMarkPoint() {
-
     }
 }

@@ -33,13 +33,13 @@ fun BottomControlPanel(
     onResume: () -> Unit,
     onFinish: () -> Unit,
     // 2. 修改 onAddMemory：接收经纬度（供添加回忆点）
-    onAddMemory: (() -> Unit)? = null, // 改为可空，兼容无定位场景
-    modifier: Modifier = Modifier
+    onAddMemory: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
 
     val onAddMemoryClick = {
-        onAddMemory?.invoke() // 调用外部传入的、已封装定位的回调
+        onAddMemory.invoke() // 调用外部传入的、已封装定位的回调
     }
 
     // 显示你原有设计的新建旅程弹窗
@@ -112,6 +112,13 @@ fun BottomControlPanel(
                     modifier = Modifier.alpha(0.8f)
                 )
 
+                Text(
+                    text = "距离：${uiState.distanceText}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(0.75f)
+                )
+
                 // 分割线（分层）
                 Divider(
                     modifier = Modifier
@@ -178,7 +185,7 @@ fun BottomControlPanel(
                                 icon = Icons.Default.Place,
                                 color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f),
                                 breathing = false,
-                                onClick = onAddMemory
+                                onClick = onAddMemoryClick
                             )
                         }
                     }

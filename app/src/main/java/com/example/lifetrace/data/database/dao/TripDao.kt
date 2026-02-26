@@ -32,4 +32,7 @@ interface TripDao {
     LIMIT 1
     """)
     suspend fun getCurrentTripId(): Long?
+
+    @Query("DELETE FROM trip WHERE tripId = :tripId")
+    suspend fun deleteTripById(tripId: Long)
 }

@@ -6,8 +6,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.example.lifetrace.data.database.AppDatabase
-import com.example.lifetrace.data.database.dao.TripDao
 import com.example.lifetrace.data.database.repository.MemoryNodeRepository
 import com.example.lifetrace.data.database.repository.TrackPointRepository
 import com.example.lifetrace.data.database.repository.TripRepository
@@ -15,6 +13,7 @@ import com.example.lifetrace.ui.screen.HomeScreen
 import com.example.lifetrace.viewmodel.HomeViewModel
 import com.example.lifetrace.viewmodel.HomeViewModelFactory
 import com.example.lifetrace.viewmodel.MapViewModel
+import com.example.lifetrace.viewmodel.MapViewModelFactory
 
 //导航控制器
 // AppNavHost.kt 改造后
@@ -34,7 +33,12 @@ fun AppNavHost() {
     ) {
         composable("homepage") {
             // 2. 创建 MapViewModel（生命周期托管）
-            val mapViewModel = viewModel<MapViewModel>()
+            val mapViewModelFactory = MapViewModelFactory(
+                trackPointRepository = trackPointRepository,
+                memoryNodeRepository = memoryNodeRepository,
+                tripRepository = tripRepository,
+            )
+            val mapViewModel = viewModel<MapViewModel>(factory = mapViewModelFactory)
 
             // 3. 创建 Factory 并传入所有依赖
             val homeViewModelFactory = HomeViewModelFactory(

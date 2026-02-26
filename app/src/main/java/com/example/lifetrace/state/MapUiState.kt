@@ -1,21 +1,26 @@
 package com.example.lifetrace.state
 
+import com.example.lifetrace.data.database.entity.MemoryNodeEntity
+import com.example.lifetrace.data.database.entity.TrackPointEntity
 import com.example.lifetrace.data.database.entity.TripEntity
 
 data class MapUiState(
     val mode: MapMode = MapMode.EXPLORE,
-
-    val focusedTrip: TripEntity? = null,  // 当前查看的旅程
-    val followUser: Boolean = false,      // 是否跟随定位
+    val focusedTrip: TripEntity? = null,
+    val followUser: Boolean = false,
     val zoomLevel: Float = 15f,
-
     val showAllTrips: Boolean = true,
-    val showMemoryNodes: Boolean = false
+    val showMemoryNodes: Boolean = false,
+    val currentTrackPoints: List<TrackPointEntity> = emptyList(),
+    val focusedTripTrackPoints: List<TrackPointEntity> = emptyList(),
+    val focusedTripMemoryNodes: List<MemoryNodeEntity> = emptyList(),
+    val allTrips: List<TripEntity> = emptyList(),
+    val allTripsTrackPoints: List<List<TrackPointEntity>> = emptyList(),
 )
 
 enum class MapMode {
-    EXPLORE,           // 浏览态
-    MEMORY,            // 回忆态
-    RECORDING,         // 记录态
-    RECORDING_MEMORY   // 记录中浏览历史
+    EXPLORE,
+    MEMORY,
+    RECORDING,
+    RECORDING_MEMORY,
 }

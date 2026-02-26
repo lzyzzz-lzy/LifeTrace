@@ -3,72 +3,75 @@ package com.example.lifetrace.data.database.repository
 import android.content.Context
 import com.example.lifetrace.data.database.AppDatabase
 import com.example.lifetrace.data.database.dao.TrackPointDao
+import com.example.lifetrace.data.database.dao.TripDao
 import com.example.lifetrace.data.database.entity.TrackPointEntity
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 
 class TrackPointRepository private constructor(
-    private val trackPointDao: TrackPointDao
+    private val trackPointDao: TrackPointDao,
+    private val tripDao: TripDao,
 ) {
-    // 缓存当前活跃的TripId（录制态用）
-    private var currentTripId: Long? = null
+    private val currentTripIdFlow = MutableStateFlow<Long?>(null)
 
-    // 1. 插入轨迹点（服务调用）
     suspend fun insertTrackPoint(trackPointEntity: TrackPointEntity) {
         trackPointDao.insertTrackPoint(trackPointEntity)
     }
 
-    // 2. 设置当前活跃TripId（开始录制时调用）
     fun setCurrentTripId(tripId: Long) {
-        currentTripId = tripId
+        currentTripIdFlow.value = tripId
     }
 
-    // 新增：公共读取方法（供外部获取当前TripId）
-    fun getCurrentTripId(): Long? {
-        return currentTripId
-    }
+    fun getCurrentTripId(): Long? = currentTripIdFlow.value
 
-    // 3. 清空当前活跃TripId（结束录制时调用）
     fun clearCurrentTripId() {
-        currentTripId = null
+        currentTripIdFlow.value = null
     }
 
-    // 4. 获取当前录制的轨迹点（UI渲染用）
+    suspend fun resolveCurrentTripIdFromDb(): Long? {
+        val tripId = tripDao.getCurrentTripId()
+        if (tripId != null) {
+            currentTripIdFlow.value = tripId
+        }
+        return tripId
+    }
+
     suspend fun getCurrentTrackPoints(): List<TrackPointEntity> {
-        currentTripId ?: return emptyList()
-        return trackPointDao.getTrackPointsByTripId(currentTripId!!)
+        val tripId = currentTripIdFlow.value ?: return emptyList()
+        return trackPointDao.getTrackPointsByTripId(tripId)
     }
 
-    // 5. 获取指定Trip的轨迹点（回忆态用）
     suspend fun getTrackPointsByTripId(tripId: Long): List<TrackPointEntity> {
         return trackPointDao.getTrackPointsByTripId(tripId)
     }
 
-    // 6. 实时监听当前轨迹点变化（供UI层实时渲染）
     fun observeCurrentTrackPoints(): Flow<List<TrackPointEntity>> {
-        return flow {
-            while (true) {
-                emit(getCurrentTrackPoints())
-                delay(1000) // 1秒刷新一次，匹配定位频率
-            }
+        return currentTripIdFlow.flatMapLatest { tripId ->
+            if (tripId == null) flowOf(emptyList()) else trackPointDao.observeTrackPointsByTripId(tripId)
         }
     }
 
-    // 7. 删除指定Trip的轨迹点（可选：删除旅程时调用）
+    fun observeTrackPointsByTripId(tripId: Long): Flow<List<TrackPointEntity>> {
+        return trackPointDao.observeTrackPointsByTripId(tripId)
+    }
+
     suspend fun deleteTrackPointsByTripId(tripId: Long) {
         trackPointDao.deleteTrackPointsByTripId(tripId)
     }
 
     companion object {
-        @Volatile private var INSTANCE: TrackPointRepository? = null
+        @Volatile
+        private var INSTANCE: TrackPointRepository? = null
 
-        // 修正：正确获取TrackPointDao
         fun getInstance(context: Context): TrackPointRepository {
             return INSTANCE ?: synchronized(this) {
                 val db = AppDatabase.getInstance(context)
-                val trackPointDao = db.trackPointDao()
-                TrackPointRepository(trackPointDao).also { INSTANCE = it }
+                TrackPointRepository(
+                    trackPointDao = db.trackPointDao(),
+                    tripDao = db.tripDao(),
+                ).also { INSTANCE = it }
             }
         }
     }

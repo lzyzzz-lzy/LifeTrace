@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!-- 注意：这里要把 android:name 指向我们下面要写的 LifeTraceApp -->
     <application
@@ -32,8 +33,8 @@
         <!-- 服务注册 -->
         <service
             android:name=".service.TripRecordingService"
-            android:foregroundServiceType="location"
-            android:exported="false"/>
+            android:exported="false"
+            android:foregroundServiceType="location" />
 
         <activity
             android:name=".MainActivity"

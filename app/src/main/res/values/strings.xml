@@ -1,3 +1,8 @@
 <resources>
-    <string name="app_name">My Application</string>
+    <string name="app_name">LifeTrace</string>
+    <string name="top_bar_delete_trip_content_description">删除旅程</string>
+    <string name="delete_trip_dialog_title">删除旅程</string>
+    <string name="delete_trip_dialog_message">删除后将移除该旅程的轨迹与回忆节点，是否继续？</string>
+    <string name="delete_trip_dialog_confirm">删除</string>
+    <string name="delete_trip_dialog_cancel">取消</string>
 </resources>

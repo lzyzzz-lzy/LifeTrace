@@ -16,6 +16,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // 修复后的 Kotlin DSL 语法
+        maven { url = uri("https://repo.amap.com/android/repository/") }
     }
 }
 

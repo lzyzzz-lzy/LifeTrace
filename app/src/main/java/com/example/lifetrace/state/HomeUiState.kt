@@ -8,18 +8,39 @@ data class HomeUiState(
     val isPaused: Boolean = false,
     val isLoading: Boolean = true,
     val isPanelExpanded: Boolean = false,
-    val timeRefreshTick: Long = 0L
+    val timeRefreshTick: Long = 0L,
+    val distanceMeters: Float = 0f,
 ) {
-    val durationText: String
+    val durationMillis: Long
         get() {
-            val trip = activeTrip ?: return "00:00"
-            val base = trip.accumulatedDuration ?: 0L
+            val trip = activeTrip ?: return 0L
+            val base = trip.accumulatedDuration
             val running = if (isRecording) {
-                val resumeTime = trip.lastResumeTime ?: trip.startTime ?: System.currentTimeMillis()
+                val resumeTime = trip.lastResumeTime ?: trip.startTime
                 System.currentTimeMillis() - resumeTime
             } else 0L
-            val totalMs = Math.max(0L, base + running)
-            return formatDuration(totalMs)
+            return Math.max(0L, base + running)
+        }
+
+    val durationText: String
+        get() = formatDuration(durationMillis)
+
+    val distanceText: String
+        get() {
+            return if (distanceMeters < 1000f) {
+                String.format("%.0f m", distanceMeters)
+            } else {
+                String.format("%.2f km", distanceMeters / 1000f)
+            }
+        }
+
+    val averageSpeedText: String
+        get() {
+            if (durationMillis <= 0L || distanceMeters <= 0f) return "0.0 km/h"
+            val hours = durationMillis / 3_600_000f
+            if (hours <= 0f) return "0.0 km/h"
+            val speed = (distanceMeters / 1000f) / hours
+            return String.format("%.1f km/h", speed)
         }
 
     companion object {

@@ -4,16 +4,26 @@ import android.content.Context
 import com.example.lifetrace.data.database.AppDatabase
 import com.example.lifetrace.data.database.dao.MemoryNodeDao
 import com.example.lifetrace.data.database.entity.MemoryNodeEntity
+import kotlinx.coroutines.flow.Flow
 
 class MemoryNodeRepository(
-    private val memoryNodeDao: MemoryNodeDao
+    private val memoryNodeDao: MemoryNodeDao,
 ) {
     suspend fun insertMemoryNode(node: MemoryNodeEntity) {
         memoryNodeDao.insertMemoryNode(node)
     }
 
+    fun observeMemoryNodesForTrip(tripId: Long): Flow<List<MemoryNodeEntity>> {
+        return memoryNodeDao.observeAllMemoryNodesForTrip(tripId)
+    }
+
+    suspend fun deleteMemoryNodesByTripId(tripId: Long) {
+        memoryNodeDao.deleteMemoryNodesByTripId(tripId)
+    }
+
     companion object {
-        @Volatile private var INSTANCE: MemoryNodeRepository? = null
+        @Volatile
+        private var INSTANCE: MemoryNodeRepository? = null
 
         fun getInstance(context: Context): MemoryNodeRepository {
             return INSTANCE ?: synchronized(this) {

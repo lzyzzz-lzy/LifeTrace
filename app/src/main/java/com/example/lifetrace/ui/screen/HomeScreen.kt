@@ -1,5 +1,6 @@
 package com.example.lifetrace.ui.screen
 
+import android.location.Location
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -9,9 +10,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.lifetrace.state.HomeUiState
+import com.example.lifetrace.R
+import com.example.lifetrace.data.database.entity.TrackPointEntity
+import com.example.lifetrace.state.MapMode
 import com.example.lifetrace.ui.components.BottomControlPanel
 import com.example.lifetrace.ui.components.TopBar
 import com.example.lifetrace.ui.map.LifeTraceMap
@@ -27,52 +34,119 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val mapUiState by mapViewModel.uiState.collectAsStateWithLifecycle()
 
-    // 1. 封装 onStart：传入 Context + 用户输入的 Trip 名称
     val onStartTrip = { tripTitle: String ->
         viewModel.startTrip(context = context, title = tripTitle)
     }
 
-    // 2. 封装其他操作：传入 Context
     val onPauseTrip = { viewModel.pauseTrip(context) }
     val onResumeTrip = { viewModel.resumeTrip(context) }
     val onFinishTrip = { viewModel.finishTrip(context) }
 
-    // 3. 封装 onAddMemory：获取地图定位后调用
     var currentLat by remember { mutableStateOf(0.0) }
     var currentLng by remember { mutableStateOf(0.0) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     val onAddMemoryNode = {
         if (currentLat != 0.0 && currentLng != 0.0) {
-            // viewModel.addMemoryNode(currentLat, currentLng)
+            viewModel.addMemoryNode(currentLat, currentLng)
         }
     }
 
-    val onMapMoved = { mapViewModel.onMapMovedWhileRecording() }
+    val onMapMoved = { fromUserGesture: Boolean, zoomLevel: Float ->
+        mapViewModel.onMapCameraChanged(fromUserGesture, zoomLevel)
+    }
+
+    val onExploreTripClicked = { tripId: Long ->
+        mapViewModel.onExploreTripClicked(tripId)
+    }
+
+    val onMapLongPressAddMemory = { lat: Double, lng: Double ->
+        if (uiState.isRecording || uiState.isPaused) {
+            viewModel.addMemoryNode(lat, lng)
+        }
+    }
+
+    val topBarSubtitle = when (mapUiState.mode) {
+        MapMode.MEMORY -> {
+            val title = mapUiState.focusedTrip?.title ?: "旅程"
+            val nodes = mapUiState.focusedTripMemoryNodes.size
+            val distanceKm = calculateDistanceMeters(mapUiState.focusedTripTrackPoints) / 1000f
+            "$title · ${String.format("%.2f", distanceKm)} km · $nodes 个节点"
+        }
+
+        MapMode.RECORDING,
+        MapMode.RECORDING_MEMORY -> "记录中 · ${uiState.distanceText} · ${uiState.averageSpeedText}"
+        else -> null
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 地图组件：更新当前定位
-
         LifeTraceMap(
             modifier = Modifier.fillMaxSize(),
             mapUiState = mapUiState,
             onMapMoved = onMapMoved,
+            onExploreTripClicked = onExploreTripClicked,
+            onMapLongPressAddMemory = onMapLongPressAddMemory,
             onCurrentLocationChanged = { lat, lng ->
                 currentLat = lat
                 currentLng = lng
-            }
+            },
         )
 
-        TopBar(modifier = Modifier.align(Alignment.TopCenter))
+        TopBar(
+            subtitle = topBarSubtitle,
+            showDelete = mapUiState.mode == MapMode.MEMORY,
+            onDelete = {
+                if (mapUiState.mode == MapMode.MEMORY) {
+                    showDeleteConfirm = true
+                }
+            },
+            modifier = Modifier.align(Alignment.TopCenter),
+        )
 
-        // 你的 BottomControlPanel：仅传封装后的回调，样式完全不变
+
+        if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text(stringResource(id = R.string.delete_trip_dialog_title)) },
+                text = { Text(stringResource(id = R.string.delete_trip_dialog_message)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        mapViewModel.deleteFocusedTrip()
+                    }) {
+                        Text(stringResource(id = R.string.delete_trip_dialog_confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text(stringResource(id = R.string.delete_trip_dialog_cancel))
+                    }
+                },
+            )
+        }
+
         BottomControlPanel(
             uiState = uiState,
-            onStart = onStartTrip,       // 接收用户输入的 Trip 名称
+            onStart = onStartTrip,
             onPause = onPauseTrip,
             onResume = onResumeTrip,
             onFinish = onFinishTrip,
-            onAddMemory = onAddMemoryNode, // 封装定位的回调
-            modifier = Modifier.align(Alignment.BottomCenter)
+            onAddMemory = onAddMemoryNode,
+            modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
+}
+
+private fun calculateDistanceMeters(points: List<TrackPointEntity>): Float {
+    if (points.size < 2) return 0f
+
+    var total = 0f
+    for (i in 1 until points.size) {
+        val prev = points[i - 1]
+        val curr = points[i]
+        val result = FloatArray(1)
+        Location.distanceBetween(prev.latitude, prev.longitude, curr.latitude, curr.longitude, result)
+        total += result.firstOrNull() ?: 0f
+    }
+    return total
 }

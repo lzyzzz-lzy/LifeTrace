@@ -1,95 +1,189 @@
 package com.example.lifetrace.viewmodel
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
-import androidx.test.core.app.ApplicationProvider
+import androidx.lifecycle.viewModelScope
 import com.example.lifetrace.data.database.entity.TripEntity
+import com.example.lifetrace.data.database.repository.MemoryNodeRepository
 import com.example.lifetrace.data.database.repository.TrackPointRepository
+import com.example.lifetrace.data.database.repository.TripRepository
 import com.example.lifetrace.state.MapMode
 import com.example.lifetrace.state.MapUiState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 class MapViewModel(
-    private val context: Context = ApplicationProvider.getApplicationContext(), // 全局Context
-    private val trackPointRepository: TrackPointRepository = TrackPointRepository.getInstance(ApplicationProvider.getApplicationContext())
+    private val trackPointRepository: TrackPointRepository,
+    private val memoryNodeRepository: MemoryNodeRepository,
+    private val tripRepository: TripRepository,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MapUiState())
     val uiState: StateFlow<MapUiState> = _uiState
 
-    fun getContext(): Context {
-        return context
-    }
-    //App启动
+    private var currentTripPointsJob: Job? = null
+    private var focusedTripDataJob: Job? = null
+
     fun onAppStart(hasActiveTrip: Boolean) {
         _uiState.update {
-            if(hasActiveTrip) {
-                it.copy(
-                    mode = MapMode.RECORDING,
-                    followUser = true,
-                    showAllTrips = false,
-                    zoomLevel = 17f
-                )
+            if (hasActiveTrip) {
+                it.copy(mode = MapMode.RECORDING, followUser = true, showAllTrips = false, zoomLevel = 17f)
             } else {
-                it.copy(
-                    mode = MapMode.EXPLORE,
-                    followUser = false,
-                    showAllTrips = true,
-                    zoomLevel = 15f
-                )
+                it.copy(mode = MapMode.EXPLORE, followUser = false, showAllTrips = true, zoomLevel = 15f)
+            }
+        }
+
+        if (!hasActiveTrip) {
+            loadAllTripsTrackPoints()
+        }
+    }
+
+    fun bindCurrentTrip(tripId: Long) {
+        trackPointRepository.setCurrentTripId(tripId)
+        currentTripPointsJob?.cancel()
+        currentTripPointsJob = viewModelScope.launch {
+            trackPointRepository.observeCurrentTrackPoints().collect { points ->
+                _uiState.update { it.copy(currentTrackPoints = points) }
             }
         }
     }
 
-    //点击某条轨迹
-    fun onTripSelected(trip: TripEntity, isRecording: Boolean) {
+    fun clearCurrentTripBinding() {
+        currentTripPointsJob?.cancel()
+        currentTripPointsJob = null
+        focusedTripDataJob?.cancel()
+        focusedTripDataJob = null
+        trackPointRepository.clearCurrentTripId()
         _uiState.update {
             it.copy(
-                mode = if(isRecording) MapMode.RECORDING_MEMORY else MapMode.MEMORY,
-                focusedTrip = trip,
-                followUser = false,
-                showAllTrips = true,
-                showMemoryNodes = true
+                currentTrackPoints = emptyList(),
+                focusedTrip = null,
+                focusedTripTrackPoints = emptyList(),
+                focusedTripMemoryNodes = emptyList(),
             )
         }
     }
 
-    //返回记录
+    fun onTripSelected(trip: TripEntity, isRecording: Boolean) {
+        focusedTripDataJob?.cancel()
+        focusedTripDataJob = viewModelScope.launch {
+            launch {
+                trackPointRepository.observeTrackPointsByTripId(trip.tripId).collect { points ->
+                    _uiState.update { it.copy(focusedTripTrackPoints = points) }
+                }
+            }
+            launch {
+                memoryNodeRepository.observeMemoryNodesForTrip(trip.tripId).collect { nodes ->
+                    _uiState.update { it.copy(focusedTripMemoryNodes = nodes) }
+                }
+            }
+        }
+
+        _uiState.update {
+            it.copy(
+                mode = if (isRecording) MapMode.RECORDING_MEMORY else MapMode.MEMORY,
+                focusedTrip = trip,
+                followUser = false,
+                showAllTrips = true,
+                showMemoryNodes = true,
+            )
+        }
+    }
+
     fun returnToRecording() {
+        focusedTripDataJob?.cancel()
+        focusedTripDataJob = null
         _uiState.update {
             it.copy(
                 mode = MapMode.RECORDING,
                 followUser = true,
                 focusedTrip = null,
                 showAllTrips = false,
-                showMemoryNodes = true
+                showMemoryNodes = true,
+                focusedTripTrackPoints = emptyList(),
+                focusedTripMemoryNodes = emptyList(),
             )
         }
     }
 
-    //进入浏览态
+
+    fun enterPausedRecording() {
+        focusedTripDataJob?.cancel()
+        focusedTripDataJob = null
+        _uiState.update {
+            it.copy(
+                mode = MapMode.RECORDING_MEMORY,
+                followUser = false,
+                focusedTrip = null,
+                showAllTrips = false,
+                showMemoryNodes = true,
+                focusedTripTrackPoints = emptyList(),
+                focusedTripMemoryNodes = emptyList(),
+            )
+        }
+    }
+
     fun enterExplore() {
+        focusedTripDataJob?.cancel()
+        focusedTripDataJob = null
         _uiState.update {
             it.copy(
                 mode = MapMode.EXPLORE,
                 followUser = false,
                 focusedTrip = null,
                 showAllTrips = true,
-                showMemoryNodes = false
+                showMemoryNodes = false,
+                focusedTripTrackPoints = emptyList(),
+                focusedTripMemoryNodes = emptyList(),
             )
+        }
+        loadAllTripsTrackPoints()
+    }
+
+    fun onMapCameraChanged(fromUserGesture: Boolean, zoomLevel: Float) {
+        _uiState.update { it.copy(zoomLevel = zoomLevel) }
+
+        if (!fromUserGesture) return
+
+        _uiState.update {
+            if (it.mode == MapMode.RECORDING) {
+                it.copy(mode = MapMode.RECORDING_MEMORY, followUser = false)
+            } else it
         }
     }
 
-    //地图发生拖动（处于记录中），进入临时回忆态
-    fun onMapMovedWhileRecording() {
-        _uiState.update {
-            if (it.mode == MapMode.RECORDING) {
+    fun onExploreTripClicked(tripId: Long) {
+        val state = _uiState.value
+        if (state.mode != MapMode.EXPLORE) return
+
+        val trip = state.allTrips.firstOrNull { it.tripId == tripId } ?: return
+        onTripSelected(trip, isRecording = false)
+    }
+
+    fun deleteFocusedTrip() {
+        val focusedTripId = _uiState.value.focusedTrip?.tripId ?: return
+        viewModelScope.launch {
+            memoryNodeRepository.deleteMemoryNodesByTripId(focusedTripId)
+            trackPointRepository.deleteTrackPointsByTripId(focusedTripId)
+            tripRepository.deleteTripById(focusedTripId)
+            enterExplore()
+        }
+    }
+
+    private fun loadAllTripsTrackPoints() {
+        viewModelScope.launch {
+            val allTrips = tripRepository.getAllTrips()
+            val tripWithTracks = allTrips.map { trip ->
+                trip to trackPointRepository.getTrackPointsByTripId(trip.tripId)
+            }.filter { (_, points) -> points.isNotEmpty() }
+
+            _uiState.update {
                 it.copy(
-                    mode = MapMode.RECORDING_MEMORY,
-                    followUser = false
+                    allTrips = tripWithTracks.map { (trip, _) -> trip },
+                    allTripsTrackPoints = tripWithTracks.map { (_, points) -> points },
                 )
-            } else it
+            }
         }
     }
 }

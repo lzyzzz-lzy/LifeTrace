@@ -19,7 +19,7 @@ import com.example.lifetrace.data.database.entity.TripEntity
         TrackPointEntity::class,
         MemoryNodeEntity::class
     ],
-    version = 2
+    version = 3
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {

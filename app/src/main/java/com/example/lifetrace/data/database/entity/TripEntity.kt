@@ -2,7 +2,6 @@ package com.example.lifetrace.data.database.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import com.amap.api.map3d.R
 
 //一次旅程
 @Entity(tableName = "trip")
