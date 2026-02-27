@@ -1,49 +1,20 @@
 package com.example.lifetrace.ui.screen
 
-import android.content.Intent
-import android.net.Uri
 import android.location.Location
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import com.example.lifetrace.R
 import com.example.lifetrace.data.database.entity.TrackPointEntity
-import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.MemoryAttachmentEntity
-import com.example.lifetrace.data.database.entity.AttachmentType
 import com.example.lifetrace.state.MapMode
 import com.example.lifetrace.ui.components.BottomControlPanel
 import com.example.lifetrace.ui.components.TopBar
@@ -51,10 +22,8 @@ import com.example.lifetrace.ui.map.LifeTraceMap
 import com.example.lifetrace.viewmodel.HomeViewModel
 import com.example.lifetrace.viewmodel.MapViewModel
 import com.example.lifetrace.ui.components.MemoryPreviewBottomSheet
-import com.example.lifetrace.ui.components.SystemCameraLauncher
 import com.example.lifetrace.ui.components.SystemCameraMode
-import com.example.lifetrace.ui.components.AudioRecordingScreen
-import com.example.lifetrace.ui.components.FullScreenImageViewer
+import com.example.lifetrace.ui.components.SystemCameraLauncher
 import com.example.lifetrace.data.database.repository.MemoryAttachmentRepository
 import com.example.lifetrace.ui.components.MemoryEditorBottomSheet
 import com.example.lifetrace.ui.overlay.OverlayHost
@@ -73,6 +42,7 @@ fun HomeScreen(
 
     // ✅ Overlay 状态：统一类型引用
     var overlayState by remember { mutableStateOf<OverlayState?>(null) }
+    var cameraMode by remember { mutableStateOf<SystemCameraMode?>(null) }
 
     var currentLat by remember { mutableStateOf(0.0) }
     var currentLng by remember { mutableStateOf(0.0) }
@@ -186,16 +156,10 @@ fun HomeScreen(
 
                 // ✅ 不要 startActivity + 空 File，直接走 Overlay 相机
                 onAddPhoto = {
-                    overlayState = OverlayState.Camera(
-                        memoryNodeId = editingNode!!.id,
-                        mode = SystemCameraMode.PHOTO
-                    )
+                    cameraMode = SystemCameraMode.PHOTO
                 },
                 onAddVideo = {
-                    overlayState = OverlayState.Camera(
-                        memoryNodeId = editingNode!!.id,
-                        mode = SystemCameraMode.VIDEO
-                    )
+                    cameraMode = SystemCameraMode.VIDEO
                 },
                 onAddAudio = {
                     overlayState = OverlayState.AudioRecorder(editingNode!!.id)
@@ -210,6 +174,26 @@ fun HomeScreen(
                 },
 
                 onFinish = { viewModel.finishEditingMemory() },
+            )
+        }
+
+        if (cameraMode != null && uiState.activeTrip != null) {
+            SystemCameraLauncher(
+                mode = cameraMode!!,
+                tripId = uiState.activeTrip!!.tripId,
+                onResult = { path, duration ->
+                    if (!path.isNullOrBlank()) {
+                        when (cameraMode) {
+                            SystemCameraMode.PHOTO -> viewModel.addPhotoAttachment(path)
+                            SystemCameraMode.VIDEO -> viewModel.addVideoAttachment(path, duration ?: 0L)
+                            null -> Unit
+                        }
+                    }
+                    cameraMode = null
+                },
+                onCancel = {
+                    cameraMode = null
+                }
             )
         }
     }
