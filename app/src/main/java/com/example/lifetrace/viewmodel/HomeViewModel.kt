@@ -6,11 +6,14 @@ import android.location.Location
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.lifetrace.data.database.entity.MemoryNodeEntity
-import com.example.lifetrace.data.database.entity.MemoryType
+import com.example.lifetrace.data.database.entity.MemoryAttachmentEntity
+import com.example.lifetrace.data.database.entity.AttachmentType
 import com.example.lifetrace.data.database.entity.TripStatus
 import com.example.lifetrace.data.database.repository.MemoryNodeRepository
+import com.example.lifetrace.data.database.repository.MemoryAttachmentRepository
 import com.example.lifetrace.data.database.repository.TrackPointRepository
 import com.example.lifetrace.data.database.repository.TripRepository
+import com.example.lifetrace.media.MediaStorageManager
 import com.example.lifetrace.service.TripRecordingService
 import com.example.lifetrace.state.HomeUiState
 import kotlinx.coroutines.Job
@@ -24,6 +27,7 @@ import kotlinx.coroutines.launch
 class HomeViewModel(
     private val tripRepository: TripRepository,
     private val memoryNodeRepository: MemoryNodeRepository,
+    private val attachmentRepository: MemoryAttachmentRepository,
     private val mapViewModel: MapViewModel,
     private val trackPointRepository: TrackPointRepository,
 ) : ViewModel() {
@@ -32,6 +36,13 @@ class HomeViewModel(
 
     private var timerJob: Job? = null
     private var distanceJob: Job? = null
+
+    // === 回忆编辑状态 ===
+    private val _editingMemoryNode = MutableStateFlow<MemoryNodeEntity?>(null)
+    val editingMemoryNode: StateFlow<MemoryNodeEntity?> = _editingMemoryNode
+
+    private val _editingAttachments = MutableStateFlow<List<MemoryAttachmentEntity>>(emptyList())
+    val editingAttachments: StateFlow<List<MemoryAttachmentEntity>> = _editingAttachments
 
     init {
         restoreTripIfNeed()
@@ -193,21 +204,188 @@ class HomeViewModel(
         )
     }
 
-    fun addMemoryNode(latitude: Double, longitude: Double) {
-        val trip = _uiState.value.activeTrip ?: return
+    // === 回忆功能方法（重构后） ===
 
+    // 长按地图添加回忆节点（快速创建）
+    fun addMemoryNode(latitude: Double, longitude: Double) {
+        startEditingMemory(latitude, longitude)
+    }
+
+    // 开始编辑回忆
+    fun startEditingMemory(latitude: Double, longitude: Double) {
+        val trip = _uiState.value.activeTrip ?: return
         viewModelScope.launch {
-            val node = MemoryNodeEntity(
+            // 创建新的回忆节点
+            val newNode = MemoryNodeEntity(
                 tripId = trip.tripId,
                 latitude = latitude,
                 longitude = longitude,
-                timestamp = System.currentTimeMillis(),
-                text = "",
-                contentUrl = "",
-                type = MemoryType.TEXT
+                text = null,
+                coverUri = null,
+                timestamp = System.currentTimeMillis()
             )
-            memoryNodeRepository.insertMemoryNode(node)
+            val nodeId = memoryNodeRepository.insertMemoryNode(newNode)
+
+            // 获取创建的节点
+            val createdNode = memoryNodeRepository.getMemoryNodeById(nodeId)
+            _editingMemoryNode.value = createdNode
+            _editingAttachments.value = emptyList()
+
+            // 更新 UI 状态
+            _uiState.update { it.copy(showMemoryEditor = true) }
         }
+    }
+
+    // 继续编辑现有回忆
+    fun continueEditingMemory(node: MemoryNodeEntity) {
+        viewModelScope.launch {
+            _editingMemoryNode.value = node
+            val attachments = attachmentRepository.getAttachmentsForNode(node.id)
+            _editingAttachments.value = attachments
+            _uiState.update { it.copy(showMemoryEditor = true) }
+        }
+    }
+
+    // 添加照片附件
+    fun addPhotoAttachment(photoUri: String) {
+        val node = _editingMemoryNode.value ?: return
+        viewModelScope.launch {
+            val attachments = _editingAttachments.value
+            val newOrderIndex = attachments.maxOfOrNull { it.orderIndex }?.plus(1) ?: 0
+
+            val attachment = MemoryAttachmentEntity(
+                memoryNodeId = node.id,
+                type = AttachmentType.PHOTO,
+                uri = photoUri,
+                duration = 0L,
+                orderIndex = newOrderIndex
+            )
+            attachmentRepository.insertAttachment(attachment)
+
+            // 如果没有封面，设置为封面
+            if (node.coverUri == null) {
+                memoryNodeRepository.updateCoverUri(node.id, photoUri)
+                _editingMemoryNode.update { it?.copy(coverUri = photoUri) }
+            }
+
+            // 重新加载附件列表
+            refreshAttachments(node.id)
+        }
+    }
+
+    // 添加音频附件
+    fun addAudioAttachment(audioUri: String, duration: Long) {
+        val node = _editingMemoryNode.value ?: return
+        viewModelScope.launch {
+            val attachments = _editingAttachments.value
+            val newOrderIndex = attachments.maxOfOrNull { it.orderIndex }?.plus(1) ?: 0
+
+            val attachment = MemoryAttachmentEntity(
+                memoryNodeId = node.id,
+                type = AttachmentType.AUDIO,
+                uri = audioUri,
+                duration = duration,
+                orderIndex = newOrderIndex
+            )
+            attachmentRepository.insertAttachment(attachment)
+
+            refreshAttachments(node.id)
+        }
+    }
+
+    // 添加视频附件
+    fun addVideoAttachment(videoUri: String, duration: Long) {
+        val node = _editingMemoryNode.value ?: return
+        viewModelScope.launch {
+            val attachments = _editingAttachments.value
+            val newOrderIndex = attachments.maxOfOrNull { it.orderIndex }?.plus(1) ?: 0
+
+            val attachment = MemoryAttachmentEntity(
+                memoryNodeId = node.id,
+                type = AttachmentType.VIDEO,
+                uri = videoUri,
+                duration = duration,
+                orderIndex = newOrderIndex
+            )
+            attachmentRepository.insertAttachment(attachment)
+
+            // 如果没有封面，设置为封面
+            if (node.coverUri == null) {
+                memoryNodeRepository.updateCoverUri(node.id, videoUri)
+                _editingMemoryNode.update { it?.copy(coverUri = videoUri) }
+            }
+
+            refreshAttachments(node.id)
+        }
+    }
+
+    // 更新文字描述
+    fun updateMemoryText(text: String) {
+        val node = _editingMemoryNode.value ?: return
+        viewModelScope.launch {
+            memoryNodeRepository.updateMemoryNode(node.id, text, node.coverUri)
+            _editingMemoryNode.update { it?.copy(text = text) }
+        }
+    }
+
+    // 设置封面
+    fun setCoverUri(uri: String) {
+        val node = _editingMemoryNode.value ?: return
+        viewModelScope.launch {
+            memoryNodeRepository.updateCoverUri(node.id, uri)
+            _editingMemoryNode.update { it?.copy(coverUri = uri) }
+        }
+    }
+
+    // 删除附件
+    fun deleteAttachment(attachment: MemoryAttachmentEntity) {
+        viewModelScope.launch {
+            attachmentRepository.deleteAttachmentWithFile(attachment.id, attachment.memoryNodeId)
+
+            // 如果删除的是封面，重新选择
+            val node = _editingMemoryNode.value
+            if (node?.coverUri == attachment.uri) {
+                val remaining = attachmentRepository.getAttachmentsForNode(node.id)
+                val newCover = remaining.firstOrNull { it.type == AttachmentType.PHOTO }?.uri
+                            ?: remaining.firstOrNull()?.uri
+                memoryNodeRepository.updateCoverUri(node.id, newCover)
+                _editingMemoryNode.update { it?.copy(coverUri = newCover) }
+            }
+
+            refreshAttachments(node?.id ?: return@launch)
+        }
+    }
+
+    // 完成编辑
+    fun finishEditingMemory() {
+        _editingMemoryNode.value = null
+        _editingAttachments.value = emptyList()
+        _uiState.update { it.copy(showMemoryEditor = false) }
+    }
+
+    // 取消编辑（删除未保存的节点）
+    fun cancelEditingMemory() {
+        val node = _editingMemoryNode.value ?: return
+        viewModelScope.launch {
+            // 如果节点没有附件，删除节点
+            val attachments = attachmentRepository.getAttachmentsForNode(node.id)
+            if (attachments.isEmpty() && node.text.isNullOrBlank()) {
+                memoryNodeRepository.deleteMemoryNodeWithFile(node.id)
+            }
+            finishEditingMemory()
+        }
+    }
+
+    // 删除回忆节点
+    fun deleteMemoryNode(nodeId: Long) {
+        viewModelScope.launch {
+            memoryNodeRepository.deleteMemoryNodeWithFile(nodeId)
+        }
+    }
+
+    private suspend fun refreshAttachments(nodeId: Long) {
+        val attachments = attachmentRepository.getAttachmentsForNode(nodeId)
+        _editingAttachments.value = attachments
     }
 
     private fun bindTripData(tripId: Long) {

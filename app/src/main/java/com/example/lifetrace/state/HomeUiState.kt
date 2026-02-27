@@ -10,6 +10,8 @@ data class HomeUiState(
     val isPanelExpanded: Boolean = false,
     val timeRefreshTick: Long = 0L,
     val distanceMeters: Float = 0f,
+    // 回忆编辑相关
+    val showMemoryEditor: Boolean = false,
 ) {
     val durationMillis: Long
         get() {

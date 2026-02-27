@@ -2,6 +2,7 @@ package com.example.lifetrace.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.TripEntity
 import com.example.lifetrace.data.database.repository.MemoryNodeRepository
 import com.example.lifetrace.data.database.repository.TrackPointRepository
@@ -22,8 +23,14 @@ class MapViewModel(
     private val _uiState = MutableStateFlow(MapUiState())
     val uiState: StateFlow<MapUiState> = _uiState
 
+    // 选中的回忆节点（用于显示详情）
+    private val _selectedMemoryNode = MutableStateFlow<MemoryNodeEntity?>(null)
+    val selectedMemoryNode: StateFlow<MemoryNodeEntity?> = _selectedMemoryNode
+
     private var currentTripPointsJob: Job? = null
     private var focusedTripDataJob: Job? = null
+    // 存储当前正在记录的 Trip，用于 RECORDING_MEMORY 模式
+    private var currentRecordingTrip: TripEntity? = null
 
     fun onAppStart(hasActiveTrip: Boolean) {
         _uiState.update {
@@ -40,6 +47,12 @@ class MapViewModel(
     }
 
     fun bindCurrentTrip(tripId: Long) {
+        // 获取并存储 Trip 实体，供 RECORDING_MEMORY 模式使用
+        viewModelScope.launch {
+            val trip = tripRepository.getTripById(tripId)
+            currentRecordingTrip = trip
+        }
+
         trackPointRepository.setCurrentTripId(tripId)
         currentTripPointsJob?.cancel()
         currentTripPointsJob = viewModelScope.launch {
@@ -107,7 +120,6 @@ class MapViewModel(
         }
     }
 
-
     fun enterPausedRecording() {
         focusedTripDataJob?.cancel()
         focusedTripDataJob = null
@@ -148,14 +160,42 @@ class MapViewModel(
 
         _uiState.update {
             if (it.mode == MapMode.RECORDING) {
-                it.copy(mode = MapMode.RECORDING_MEMORY, followUser = false)
+                // 切换到 RECORDING_MEMORY 时，设置 focusedTrip 为当前记录的 Trip
+                it.copy(mode = MapMode.RECORDING_MEMORY, followUser = false, focusedTrip = currentRecordingTrip)
             } else it
         }
+
+        // 进入 RECORDING_MEMORY 模式时，加载当前 trip 的回忆节点
+        if (_uiState.value.mode == MapMode.RECORDING_MEMORY && currentRecordingTrip != null) {
+            loadFocusedTripMemoryNodes(currentRecordingTrip!!)
+        }
+    }
+
+    private fun loadFocusedTripMemoryNodes(trip: TripEntity) {
+        focusedTripDataJob?.cancel()
+        focusedTripDataJob = viewModelScope.launch {
+            memoryNodeRepository.observeMemoryNodesForTrip(trip.tripId).collect { nodes ->
+                _uiState.update { it.copy(focusedTripMemoryNodes = nodes) }
+            }
+        }
+    }
+
+    // 点击回忆节点
+    fun onMemoryNodeClicked(node: MemoryNodeEntity) {
+        _selectedMemoryNode.value = node
+        _uiState.update { it.copy(selectedMemoryNode = node) }
+    }
+
+    // 关闭回忆详情
+    fun dismissMemoryNodeDetail() {
+        _selectedMemoryNode.value = null
+        _uiState.update { it.copy(selectedMemoryNode = null) }
     }
 
     fun onExploreTripClicked(tripId: Long) {
         val state = _uiState.value
-        if (state.mode != MapMode.EXPLORE) return
+        // 支持 EXPLORE 和 MEMORY 模式下切换旅程
+        if (state.mode != MapMode.EXPLORE && state.mode != MapMode.MEMORY) return
 
         val trip = state.allTrips.firstOrNull { it.tripId == tripId } ?: return
         onTripSelected(trip, isRecording = false)

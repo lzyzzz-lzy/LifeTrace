@@ -152,7 +152,7 @@ fun BottomControlPanel(
                     // 场景1：无旅程 → 仅核心开始按钮（用你原有组件）
                     uiState.activeTrip == null -> {
                         MainCircleButton(
-                            icon = Icons.Default.PlayArrow,
+                            icon = Icons.Filled.PlayArrow,
                             color = MaterialTheme.colorScheme.primary,
                             breathing = false,
                             onClick = { showCreateDialog = true }
@@ -164,7 +164,7 @@ fun BottomControlPanel(
                         // 左侧：结束按钮（缩小版）
                         Box(modifier = Modifier.size(48.dp)) {
                             MainCircleButton(
-                                icon = Icons.Default.Stop,
+                                icon = Icons.Filled.Stop,
                                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
                                 breathing = false,
                                 onClick = onFinish
@@ -173,7 +173,7 @@ fun BottomControlPanel(
 
                         // 中间：暂停按钮（你的原生组件，保留64dp+呼吸动效）
                         MainCircleButton(
-                            icon = Icons.Default.Pause,
+                            icon = Icons.Filled.Pause,
                             color = MaterialTheme.colorScheme.secondary,
                             breathing = true,
                             onClick = onPause
@@ -182,7 +182,7 @@ fun BottomControlPanel(
                         // 右侧：添加回忆（缩小版）
                         Box(modifier = Modifier.size(48.dp)) {
                             MainCircleButton(
-                                icon = Icons.Default.Place,
+                                icon = Icons.Filled.Place,
                                 color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f),
                                 breathing = false,
                                 onClick = onAddMemoryClick
@@ -195,7 +195,7 @@ fun BottomControlPanel(
                         // 左侧：结束按钮（缩小版）
                         Box(modifier = Modifier.size(48.dp)) {
                             MainCircleButton(
-                                icon = Icons.Default.Stop,
+                                icon = Icons.Filled.Stop,
                                 color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
                                 breathing = false,
                                 onClick = onFinish
@@ -204,7 +204,7 @@ fun BottomControlPanel(
 
                         // 中间：继续按钮（你的原生组件）
                         MainCircleButton(
-                            icon = Icons.Default.PlayArrow,
+                            icon = Icons.Filled.PlayArrow,
                             color = MaterialTheme.colorScheme.primary,
                             breathing = false,
                             onClick = onResume
@@ -213,7 +213,7 @@ fun BottomControlPanel(
                         // 右侧：添加回忆（缩小版）
                         Box(modifier = Modifier.size(48.dp)) {
                             MainCircleButton(
-                                icon = Icons.Default.Place,
+                                icon = Icons.Filled.Place,
                                 color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.9f),
                                 breathing = false,
                                 onClick = onAddMemory

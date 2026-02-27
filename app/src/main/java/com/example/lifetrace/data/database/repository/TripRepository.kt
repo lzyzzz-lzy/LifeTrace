@@ -42,6 +42,10 @@ class TripRepository(
         tripDao.deleteTripById(tripId)
     }
 
+    suspend fun getTripById(tripId: Long): TripEntity? {
+        return tripDao.getTripById(tripId)
+    }
+
 
     companion object {
         @Volatile private var INSTANCE: TripRepository? = null

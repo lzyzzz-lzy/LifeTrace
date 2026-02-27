@@ -14,6 +14,7 @@ data class MapUiState(
     val currentTrackPoints: List<TrackPointEntity> = emptyList(),
     val focusedTripTrackPoints: List<TrackPointEntity> = emptyList(),
     val focusedTripMemoryNodes: List<MemoryNodeEntity> = emptyList(),
+    val selectedMemoryNode: MemoryNodeEntity? = null,
     val allTrips: List<TripEntity> = emptyList(),
     val allTripsTrackPoints: List<List<TrackPointEntity>> = emptyList(),
 )

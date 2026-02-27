@@ -12,6 +12,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
+    <!-- 2. 回忆功能权限：相机 + 录音 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                 android:maxSdkVersion="32" />
+    <uses-feature android:name="android.hardware.camera.any"
+                  android:required="false" />
+
     <!-- 注意：这里要把 android:name 指向我们下面要写的 LifeTraceApp -->
     <application
         android:name=".LifeTraceApp"
@@ -35,6 +43,17 @@
             android:name=".service.TripRecordingService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- FileProvider 用于系统相机保存文件到应用私有目录 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".MainActivity"

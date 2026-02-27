@@ -1,28 +1,36 @@
 package com.example.lifetrace.data.database.converter
 
 import androidx.room.TypeConverter
-import com.example.lifetrace.data.database.entity.MemoryType
 import com.example.lifetrace.data.database.entity.TripStatus
+import com.example.lifetrace.data.database.entity.AttachmentType
 
-//自定义类型，Room正常工作需做如下处理
+/**
+ * Room 类型转换器
+ * 用于 enum <-> String 转换
+ */
 class Converters {
+
+    // ---------------- TripStatus ----------------
+
     @TypeConverter
-    fun fromTripStaus(status: TripStatus): String {
-        return status.name
+    fun fromTripStatus(status: TripStatus?): String? {
+        return status?.name
     }
 
     @TypeConverter
-    fun toTripStatus(value: String): TripStatus {
-        return TripStatus.valueOf(value)
+    fun toTripStatus(value: String?): TripStatus? {
+        return value?.let { TripStatus.valueOf(it) }
+    }
+
+    // ---------------- AttachmentType ----------------
+
+    @TypeConverter
+    fun fromAttachmentType(type: AttachmentType?): String? {
+        return type?.name
     }
 
     @TypeConverter
-    fun fromMemoryType(type: MemoryType): String {
-        return type.name
-    }
-
-    @TypeConverter
-    fun toMemoryType(value: String): MemoryType {
-        return MemoryType.valueOf(value)
+    fun toAttachmentType(value: String?): AttachmentType? {
+        return value?.let { AttachmentType.valueOf(it) }
     }
 }

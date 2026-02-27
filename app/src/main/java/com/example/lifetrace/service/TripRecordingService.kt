@@ -29,8 +29,10 @@ private const val TAG = "TripRecordingService"
 private const val NOTIFICATION_ID = 1
 private const val CHANNEL_ID = "trip_record_channel"
 private const val MIN_ACCURACY_METERS = 30f
-private const val MIN_DISTANCE_METERS = 4f
-private const val MAX_WRITE_INTERVAL_MS = 10_000L
+private const val MIN_DISTANCE_METERS = 10f  // 最小记录距离：10米（减少 GPS 漂移的影响）
+private const val MIN_TIME_INTERVAL_MS = 3000L  // 最小时间间隔：3秒（避免频繁记录）
+private const val MAX_WRITE_INTERVAL_MS = 60_000L  // 最大时间间隔：60秒（静止时的兜底写点）
+private const val MAX_VELOCITY_MS = 35f  // 最大速度：35m/s（约 126 km/h，用于过滤异常点）
 
 class TripRecordingService : Service(), AMapLocationListener {
 
@@ -198,18 +200,36 @@ class TripRecordingService : Service(), AMapLocationListener {
         val lastTime = lastAcceptedTimestamp
         if (lastLat == null || lastLng == null || lastTime == null) return true
 
-        if (pointTimestamp - lastTime >= MAX_WRITE_INTERVAL_MS) {
+        val timeSinceLast = pointTimestamp - lastTime
+
+        // 1. 最小时间间隔检查：避免短时间内记录多个点
+        if (timeSinceLast < MIN_TIME_INTERVAL_MS) {
+            Log.d(TAG, "过滤轨迹点：时间间隔 ${timeSinceLast}ms 小于阈值")
+            return false
+        }
+
+        // 2. 时间兜底：如果超过最大时间间隔，强制写点
+        if (timeSinceLast >= MAX_WRITE_INTERVAL_MS) {
             Log.d(TAG, "时间兜底写点：距离不足但已超过 ${MAX_WRITE_INTERVAL_MS}ms")
             return true
         }
 
+        // 3. 距离检查
         val results = FloatArray(1)
         Location.distanceBetween(lastLat, lastLng, lat, lng, results)
         val distance = results.firstOrNull() ?: 0f
         if (distance < MIN_DISTANCE_METERS) {
-            Log.d(TAG, "过滤轨迹点：移动距离 $distance m 小于阈值")
+            Log.d(TAG, "过滤轨迹点：移动距离 ${distance}m 小于阈值")
             return false
         }
+
+        // 4. 速度检查：过滤异常快速移动的点（GPS 漂移可能导致）
+        val velocity = distance / (timeSinceLast / 1000f)  // m/s
+        if (velocity > MAX_VELOCITY_MS) {
+            Log.d(TAG, "过滤轨迹点：速度 ${velocity}m/s 超过阈值（可能的 GPS 漂移）")
+            return false
+        }
+
         return true
     }
 }

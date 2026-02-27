@@ -48,7 +48,7 @@ fun TopBar(
         if (showDelete && onDelete != null) {
             IconButton(onClick = onDelete) {
                 Icon(
-                    Icons.Default.Delete,
+                    Icons.Filled.Delete,
                     contentDescription = stringResource(id = R.string.top_bar_delete_trip_content_description),
                 )
             }
@@ -56,7 +56,7 @@ fun TopBar(
             IconButton(
                 onClick = {/*todo 菜单*/},
             ) {
-                Icon(Icons.Default.MoreVert, contentDescription = null)
+                Icon(Icons.Filled.MoreVert, contentDescription = null)
             }
         }
     }

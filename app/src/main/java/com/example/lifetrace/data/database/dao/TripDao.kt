@@ -35,4 +35,7 @@ interface TripDao {
 
     @Query("DELETE FROM trip WHERE tripId = :tripId")
     suspend fun deleteTripById(tripId: Long)
+
+    @Query("SELECT * FROM trip WHERE tripId = :tripId")
+    suspend fun getTripById(tripId: Long): TripEntity?
 }
