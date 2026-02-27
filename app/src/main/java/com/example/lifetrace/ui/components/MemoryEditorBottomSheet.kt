@@ -43,6 +43,7 @@ fun MemoryEditorBottomSheet(
     onAddVideo: () -> Unit,
     onDeleteAttachment: (MemoryAttachmentEntity) -> Unit,
     onSetCover: (String) -> Unit,
+    onVideoPlay: (MemoryAttachmentEntity) -> Unit = {},
     onFinish: () -> Unit,
 ) {
     var text by remember { mutableStateOf(node.text ?: "") }
@@ -148,7 +149,8 @@ fun MemoryEditorBottomSheet(
                             attachment = attachment,
                             isCover = node.coverUri == attachment.uri,
                             onClick = { onSetCover(attachment.uri) },
-                            onDelete = { onDeleteAttachment(attachment) }
+                            onDelete = { onDeleteAttachment(attachment) },
+                            onVideoPlay = { onVideoPlay(it) }
                         )
                     }
                 }
@@ -207,6 +209,7 @@ private fun AttachmentItem(
     isCover: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
+    onVideoPlay: (MemoryAttachmentEntity) -> Unit = {},
 ) {
     val context = LocalContext.current
     val isVideo = attachment.type == AttachmentType.VIDEO
@@ -236,15 +239,21 @@ private fun AttachmentItem(
                         modifier = Modifier.size(40.dp)
                     )
                     Spacer(Modifier.height(4.dp))
-                    Icon(
-                        imageVector = Icons.Filled.PlayCircle,
-                        contentDescription = "播放",
-                        tint = Color.White,
+                    // 播放按钮（独立点击区域）
+                    Box(
                         modifier = Modifier
                             .size(48.dp)
                             .background(MaterialTheme.colorScheme.primary, CircleShape)
-                            .padding(12.dp)
-                    )
+                            .clickable(onClick = { onVideoPlay(attachment) }),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = "播放",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
             }
         } else if (isAudio) {

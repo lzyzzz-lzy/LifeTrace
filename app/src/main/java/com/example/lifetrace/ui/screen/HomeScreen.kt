@@ -1,5 +1,7 @@
 package com.example.lifetrace.ui.screen
 
+import android.content.Intent
+import android.net.Uri
 import android.location.Location
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,11 +18,12 @@ import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
@@ -33,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.lifetrace.R
@@ -46,60 +50,58 @@ import com.example.lifetrace.ui.components.TopBar
 import com.example.lifetrace.ui.map.LifeTraceMap
 import com.example.lifetrace.viewmodel.HomeViewModel
 import com.example.lifetrace.viewmodel.MapViewModel
-import com.example.lifetrace.ui.components.MemoryEditorBottomSheet
 import com.example.lifetrace.ui.components.MemoryPreviewBottomSheet
 import com.example.lifetrace.ui.components.SystemCameraLauncher
 import com.example.lifetrace.ui.components.SystemCameraMode
 import com.example.lifetrace.ui.components.AudioRecordingScreen
 import com.example.lifetrace.ui.components.FullScreenImageViewer
 import com.example.lifetrace.data.database.repository.MemoryAttachmentRepository
+import com.example.lifetrace.ui.components.MemoryEditorBottomSheet
+import com.example.lifetrace.ui.overlay.OverlayHost
+import com.example.lifetrace.ui.overlay.OverlayState
 
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
     mapViewModel: MapViewModel,
 ) {
-    val context = LocalContext.current.applicationContext
-    val attachmentRepository = remember { MemoryAttachmentRepository.getInstance(context) }
+    val context = LocalContext.current   // ✅ 用 Activity context
+    val attachmentRepository = remember { MemoryAttachmentRepository.getInstance(context.applicationContext) }
+
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val mapUiState by mapViewModel.uiState.collectAsStateWithLifecycle()
 
-    val onStartTrip = { tripTitle: String ->
-        viewModel.startTrip(context = context, title = tripTitle)
-    }
-
-    val onPauseTrip = { viewModel.pauseTrip(context) }
-    val onResumeTrip = { viewModel.resumeTrip(context) }
-    val onFinishTrip = { viewModel.finishTrip(context) }
+    // ✅ Overlay 状态：统一类型引用
+    var overlayState by remember { mutableStateOf<OverlayState?>(null) }
 
     var currentLat by remember { mutableStateOf(0.0) }
     var currentLng by remember { mutableStateOf(0.0) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
-    var showCamera by remember { mutableStateOf(false) }
-    var showAudioRecorder by remember { mutableStateOf(false) }
-    var cameraMode by remember { mutableStateOf(com.example.lifetrace.ui.components.SystemCameraMode.PHOTO) }
 
-    // 编辑状态
     val editingNode by viewModel.editingMemoryNode.collectAsStateWithLifecycle()
     val editingAttachments by viewModel.editingAttachments.collectAsStateWithLifecycle()
 
-    // 预览状态 - 用于地图 marker 点击后的预览
     val selectedMemoryNode by mapViewModel.selectedMemoryNode.collectAsStateWithLifecycle()
     var previewAttachments by remember { mutableStateOf<List<MemoryAttachmentEntity>>(emptyList()) }
 
-    // 当选中的节点变化时，加载附件
     LaunchedEffect(selectedMemoryNode?.id) {
-        if (selectedMemoryNode != null) {
-            previewAttachments = attachmentRepository.getAttachmentsForNode(selectedMemoryNode!!.id)
-        } else {
-            previewAttachments = emptyList()
-        }
+        previewAttachments = if (selectedMemoryNode != null) {
+            attachmentRepository.getAttachmentsForNode(selectedMemoryNode!!.id)
+        } else emptyList()
     }
 
-    // 全屏图片查看器状态
-    var selectedPhoto by remember { mutableStateOf<MemoryAttachmentEntity?>(null) }
-    var photoIndex by remember { mutableStateOf(-1) }
-    var photoCount by remember { mutableStateOf(0) }
+    // Overlay 触发回调
+    val onImageClick: (String) -> Unit = { uri ->
+        overlayState = OverlayState.ImagePreview(uri)
+    }
+    val onVideoClick: (String) -> Unit = { uri ->
+        overlayState = OverlayState.VideoPlayer(uri)
+    }
+    val onAudioRecorderClick: (Long) -> Unit = { nodeId ->
+        overlayState = OverlayState.AudioRecorder(nodeId)
+    }
+    val onAudioPlayerClick: (String) -> Unit = { uri ->
+        overlayState = OverlayState.AudioPlayer(uri)
+    }
 
     val onAddMemoryNode = {
         if (currentLat != 0.0 && currentLng != 0.0) {
@@ -107,41 +109,21 @@ fun HomeScreen(
         }
     }
 
-    val onMapLongPressAddMemory = { lat: Double, lng: Double ->
-        if (uiState.isRecording || uiState.isPaused) {
-            viewModel.startEditingMemory(lat, lng)
-        }
-    }
-
-    val onMemoryNodeClicked = { node: MemoryNodeEntity ->
-        mapViewModel.onMemoryNodeClicked(node)
-    }
-
-    val onMapMoved = { fromUserGesture: Boolean, zoomLevel: Float ->
-        mapViewModel.onMapCameraChanged(fromUserGesture, zoomLevel)
-    }
-
-    val topBarSubtitle = when (mapUiState.mode) {
-        MapMode.MEMORY -> {
-            val title = mapUiState.focusedTrip?.title ?: "旅程"
-            val nodes = mapUiState.focusedTripMemoryNodes.size
-            val distanceKm = calculateDistanceMeters(mapUiState.focusedTripTrackPoints) / 1000f
-            "$title · ${String.format("%.2f", distanceKm)} km · $nodes 个节点"
-        }
-
-        MapMode.RECORDING,
-        MapMode.RECORDING_MEMORY -> "记录中 · ${uiState.distanceText} · ${uiState.averageSpeedText}"
-        else -> null
-    }
-
     Box(modifier = Modifier.fillMaxSize()) {
+
         LifeTraceMap(
             modifier = Modifier.fillMaxSize(),
             mapUiState = mapUiState,
-            onMapMoved = onMapMoved,
+            onMapMoved = { fromUserGesture, zoomLevel ->
+                mapViewModel.onMapCameraChanged(fromUserGesture, zoomLevel)
+            },
             onExploreTripClicked = { tripId -> mapViewModel.onExploreTripClicked(tripId) },
-            onMapLongPressAddMemory = onMapLongPressAddMemory,
-            onMemoryNodeClicked = onMemoryNodeClicked,
+            onMapLongPressAddMemory = { lat, lng ->
+                if (uiState.isRecording || uiState.isPaused) viewModel.startEditingMemory(lat, lng)
+            },
+            onMemoryNodeClicked = { node ->
+                mapViewModel.onMemoryNodeClicked(node)
+            },
             onCurrentLocationChanged = { lat, lng ->
                 currentLat = lat
                 currentLng = lng
@@ -149,7 +131,17 @@ fun HomeScreen(
         )
 
         TopBar(
-            subtitle = topBarSubtitle,
+            subtitle = when (mapUiState.mode) {
+                MapMode.MEMORY -> {
+                    val title = mapUiState.focusedTrip?.title ?: "旅程"
+                    val nodes = mapUiState.focusedTripMemoryNodes.size
+                    val distanceKm = calculateDistanceMeters(mapUiState.focusedTripTrackPoints) / 1000f
+                    "$title · ${String.format("%.2f", distanceKm)} km · $nodes 个节点"
+                }
+                MapMode.RECORDING, MapMode.RECORDING_MEMORY ->
+                    "记录中 · ${uiState.distanceText} · ${uiState.averageSpeedText}"
+                else -> null
+            },
             showDelete = mapUiState.mode == MapMode.MEMORY,
             onDelete = { mapViewModel.deleteFocusedTrip() },
             modifier = Modifier.align(Alignment.TopCenter),
@@ -157,15 +149,14 @@ fun HomeScreen(
 
         BottomControlPanel(
             uiState = uiState,
-            onStart = onStartTrip,
-            onPause = onPauseTrip,
-            onResume = onResumeTrip,
-            onFinish = onFinishTrip,
+            onStart = { title -> viewModel.startTrip(context = context.applicationContext, title = title) },
+            onPause = { viewModel.pauseTrip(context.applicationContext) },
+            onResume = { viewModel.resumeTrip(context.applicationContext) },
+            onFinish = { viewModel.finishTrip(context.applicationContext) },
             onAddMemory = onAddMemoryNode,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
 
-        // 回忆预览
         if (selectedMemoryNode != null) {
             MemoryPreviewBottomSheet(
                 node = selectedMemoryNode!!,
@@ -179,89 +170,60 @@ fun HomeScreen(
                     viewModel.deleteMemoryNode(selectedMemoryNode!!.id)
                     mapViewModel.dismissMemoryNodeDetail()
                 },
-                onPhotoClick = { photo, index, total ->
-                    selectedPhoto = photo
-                    photoIndex = index
-                    photoCount = total
-                },
+                onImageClick = onImageClick,
+                onVideoClick = onVideoClick,
+                onAudioRecorderClick = onAudioRecorderClick,
+                onAudioPlayerClick = onAudioPlayerClick,
             )
         }
 
-        // 相机拍照/录像界面
-        if (showCamera && editingNode != null) {
-            SystemCameraLauncher(
-                mode = cameraMode,
-                tripId = uiState.activeTrip?.tripId ?: 0L,
-                onResult = { uri, duration ->
-                    if (cameraMode == com.example.lifetrace.ui.components.SystemCameraMode.VIDEO) {
-                        // 视频模式
-                        uri?.let {
-                            viewModel.addVideoAttachment(it, duration ?: 0L)
-                        }
-                    } else {
-                        // 照片模式
-                        uri?.let {
-                            viewModel.addPhotoAttachment(it)
-                        }
-                    }
-                    showCamera = false
-                },
-                onCancel = {
-                    showCamera = false
-                },
-            )
-        }
-
-        // 音频录制界面
-        if (showAudioRecorder && editingNode != null) {
-            AudioRecordingScreen(
-                onRecordingComplete = { audioUri, duration ->
-                    viewModel.addAudioAttachment(audioUri, duration)
-                    showAudioRecorder = false
-                },
-                onCancel = {
-                    showAudioRecorder = false
-                },
-            )
-        }
-
-        // 全屏图片查看器（放在最外层以确保 z-index 最高）
-        if (selectedPhoto != null) {
-            FullScreenImageViewer(
-                photo = selectedPhoto!!,
-                onDismiss = { selectedPhoto = null }
-            )
-        }
-
-        // 回忆编辑器
         if (editingNode != null) {
             MemoryEditorBottomSheet(
                 node = editingNode!!,
                 attachments = editingAttachments,
                 onDismiss = { viewModel.finishEditingMemory() },
                 onTextChange = { viewModel.updateMemoryText(it) },
+
+                // ✅ 不要 startActivity + 空 File，直接走 Overlay 相机
                 onAddPhoto = {
-                    cameraMode = com.example.lifetrace.ui.components.SystemCameraMode.PHOTO
-                    showCamera = true
-                },
-                onAddAudio = {
-                    showAudioRecorder = true
+                    overlayState = OverlayState.Camera(
+                        memoryNodeId = editingNode!!.id,
+                        mode = SystemCameraMode.PHOTO
+                    )
                 },
                 onAddVideo = {
-                    cameraMode = com.example.lifetrace.ui.components.SystemCameraMode.VIDEO
-                    showCamera = true
+                    overlayState = OverlayState.Camera(
+                        memoryNodeId = editingNode!!.id,
+                        mode = SystemCameraMode.VIDEO
+                    )
                 },
+                onAddAudio = {
+                    overlayState = OverlayState.AudioRecorder(editingNode!!.id)
+                },
+
                 onDeleteAttachment = { viewModel.deleteAttachment(it) },
                 onSetCover = { viewModel.setCoverUri(it) },
+
+                // ✅ 适配：假设参数是 MemoryAttachmentEntity
+                onVideoPlay = { videoAttachment ->
+                    onVideoClick(videoAttachment.uri)
+                },
+
                 onFinish = { viewModel.finishEditingMemory() },
             )
         }
     }
+
+    // ✅ Overlay 主机
+    OverlayHost(
+        overlayState = overlayState,
+        onDismiss = { overlayState = null }
+    )
 }
 
+// ✅ 一定要在 HomeScreen 外面
 private fun calculateDistanceMeters(points: List<TrackPointEntity>): Float {
     if (points.size < 2) return 0f
-
     var total = 0f
     for (i in 1 until points.size) {
         val prev = points[i - 1]

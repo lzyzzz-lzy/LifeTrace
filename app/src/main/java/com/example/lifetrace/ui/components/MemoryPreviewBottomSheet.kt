@@ -41,7 +41,11 @@ fun MemoryPreviewBottomSheet(
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onPhotoClick: (MemoryAttachmentEntity, Int, Int) -> Unit = { _, _, _ -> },
+    // 新的 Overlay 回调
+    onImageClick: (MemoryAttachmentEntity, Int, Int) -> Unit = { _, _, _ -> },
+    onVideoClick: (MemoryAttachmentEntity) -> Unit = { _, _ -> },
+    onAudioRecorderClick: () -> Unit = { _, _ -> },
+    onAudioPlayerClick: (MemoryAttachmentEntity) -> Unit = { _, _ -> },
 ) {
     val photoAttachments = attachments.filter { it.type == AttachmentType.PHOTO }
     val audioAttachments = attachments.filter { it.type == AttachmentType.AUDIO }
@@ -98,7 +102,7 @@ fun MemoryPreviewBottomSheet(
                                 .aspectRatio(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .clickable {
-                                    onPhotoClick(attachment, photoAttachments.indexOf(attachment), photoAttachments.size)
+                                    onImageClick(attachment, photoAttachments.indexOf(attachment), photoAttachments.size)
                                 }
                         ) {
                             AsyncImage(
@@ -119,14 +123,14 @@ fun MemoryPreviewBottomSheet(
                         .height(200.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .clickable {
-                            onPhotoClick(
+                            onImageClick(
                                 MemoryAttachmentEntity(
                                     id = 0,
                                     memoryNodeId = node.id,
                                     type = AttachmentType.PHOTO,
                                     uri = node.coverUri!!
                                 ),
-                                0,
+                                1,
                                 1
                             )
                         }
@@ -138,8 +142,9 @@ fun MemoryPreviewBottomSheet(
                         contentScale = ContentScale.Crop
                     )
                 }
-                Spacer(Modifier.height(16.dp))
             }
+
+            Spacer(Modifier.height(16.dp))
 
             // 文字描述
             node.text?.let { text ->
@@ -248,7 +253,7 @@ private fun formatTime(timestamp: Long): String {
         diff < 60_000L -> "刚刚"
         diff < 3600_000L -> "${diff / 60_000L} 分钟前"
         diff < 86400_000L -> "${diff / 3600_000L} 小时前"
-        diff < 604_800_000L -> "${diff / 86400_000L} 天前"
+        diff < 604800_000L -> "${diff / 86400_000L} 天前"
         else -> {
             val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
                 .format(Date(timestamp))
