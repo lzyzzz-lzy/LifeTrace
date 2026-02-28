@@ -24,6 +24,10 @@ class MemoryNodeRepository(
         return memoryNodeDao.observeAllMemoryNodesForTrip(tripId)
     }
 
+    suspend fun getMemoryNodesForTrip(tripId: Long): List<MemoryNodeEntity> {
+        return memoryNodeDao.getAllMemoryNodesForTrip(tripId)
+    }
+
     suspend fun deleteMemoryNodesByTripId(tripId: Long) {
         // 先删除所有节点和附件的文件
         memoryNodeDao.getAllMemoryNodesForTrip(tripId).forEach { node ->

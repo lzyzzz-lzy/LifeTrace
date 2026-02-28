@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -21,11 +20,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.MemoryAttachmentEntity
 import com.example.lifetrace.data.database.entity.AttachmentType
+import com.example.lifetrace.media.player.VideoPlayerManager
+import com.example.lifetrace.utils.formatDuration
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -41,15 +41,33 @@ fun MemoryPreviewBottomSheet(
     onDismiss: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    // 新的 Overlay 回调
+
+    // Overlay 回调
     onImageClick: (MemoryAttachmentEntity, Int, Int) -> Unit = { _, _, _ -> },
-    onVideoClick: (MemoryAttachmentEntity) -> Unit = { _, _ -> },
-    onAudioRecorderClick: () -> Unit = { _, _ -> },
-    onAudioPlayerClick: (MemoryAttachmentEntity) -> Unit = { _, _ -> },
+    onVideoClick: (MemoryAttachmentEntity) -> Unit = { _ -> },
+    onAudioRecorderClick: () -> Unit = { },
+    onAudioPlayerClick: (MemoryAttachmentEntity) -> Unit = { _ -> },
 ) {
+    val context = LocalContext.current
     val photoAttachments = attachments.filter { it.type == AttachmentType.PHOTO }
     val audioAttachments = attachments.filter { it.type == AttachmentType.AUDIO }
     val videoAttachments = attachments.filter { it.type == AttachmentType.VIDEO }
+
+    // 内嵌音频播放器状态
+    val audioPlayerManager = remember { VideoPlayerManager(context) }
+    var currentPlayingAudioId by remember { mutableStateOf<Long?>(null) }
+
+    // 订阅播放器状态
+    val isPlaying by audioPlayerManager.isPlaying.collectAsState()
+    val currentPosition by audioPlayerManager.currentPosition.collectAsState()
+    val duration by audioPlayerManager.duration.collectAsState()
+
+    // 清理播放器资源
+    DisposableEffect(Unit) {
+        onDispose {
+            audioPlayerManager.release()
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -142,6 +160,162 @@ fun MemoryPreviewBottomSheet(
                         contentScale = ContentScale.Crop
                     )
                 }
+                Spacer(Modifier.height(16.dp))
+            }
+
+            // 视频展示区（缩略图网格）
+            if (videoAttachments.isNotEmpty()) {
+                Text(
+                    text = "视频 (${videoAttachments.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.height(if (videoAttachments.size > 3) 250.dp else 150.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(videoAttachments, key = { it.id }) { video ->
+                        Box(
+                            modifier = Modifier
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onVideoClick(video) }
+                        ) {
+                            // 显示视频缩略图
+                            AsyncImage(
+                                model = video.thumbnailUri?.let { File(it) }
+                                    ?: File(video.uri),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                            // 播放图标覆盖层
+                            Icon(
+                                imageVector = Icons.Filled.PlayCircle,
+                                contentDescription = "播放视频",
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .size(48.dp),
+                                tint = Color.White.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+
+            // 音频展示区（内嵌播放器）
+            if (audioAttachments.isNotEmpty()) {
+                Text(
+                    text = "音频 (${audioAttachments.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    audioAttachments.forEach { audio ->
+                        val isCurrentAudio = currentPlayingAudioId == audio.id
+                        val progress = if (isCurrentAudio && duration > 0) {
+                            currentPosition.toFloat() / duration.toFloat()
+                        } else 0f
+
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isCurrentAudio)
+                                MaterialTheme.colorScheme.primaryContainer
+                            else
+                                MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Audiotrack,
+                                        contentDescription = null,
+                                        tint = if (isCurrentAudio)
+                                            MaterialTheme.colorScheme.primary
+                                        else
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            "音频",
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            if (isCurrentAudio && isPlaying)
+                                                "${formatDuration(currentPosition)} / ${formatDuration(duration)}"
+                                            else
+                                                formatDuration(audio.duration),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    // 播放/暂停按钮
+                                    IconButton(
+                                        onClick = {
+                                            if (isCurrentAudio) {
+                                                if (isPlaying) {
+                                                    audioPlayerManager.pause()
+                                                } else {
+                                                    audioPlayerManager.resume()
+                                                }
+                                            } else {
+                                                // 播放新音频
+                                                audioPlayerManager.play(audio.uri)
+                                                currentPlayingAudioId = audio.id
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isCurrentAudio && isPlaying)
+                                                Icons.Filled.Pause
+                                            else
+                                                Icons.Filled.PlayArrow,
+                                            contentDescription = if (isCurrentAudio && isPlaying) "暂停" else "播放",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    // 停止按钮（仅在播放时显示）
+                                    if (isCurrentAudio) {
+                                        IconButton(
+                                            onClick = {
+                                                audioPlayerManager.stop()
+                                                currentPlayingAudioId = null
+                                            }
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Stop,
+                                                contentDescription = "停止",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                                // 进度条（仅在播放时显示）
+                                if (isCurrentAudio) {
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(
+                                        progress = { progress },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        color = MaterialTheme.colorScheme.primary,
+                                        trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
             }
 
             Spacer(Modifier.height(16.dp))
@@ -163,34 +337,6 @@ fun MemoryPreviewBottomSheet(
                         )
                     }
                     Spacer(Modifier.height(16.dp))
-                }
-            }
-
-            // 媒体附件统计
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                if (photoAttachments.isNotEmpty()) {
-                    AttachmentCountItem(
-                        icon = Icons.Filled.PhotoLibrary,
-                        count = photoAttachments.size,
-                        label = "张照片"
-                    )
-                }
-                if (audioAttachments.isNotEmpty()) {
-                    AttachmentCountItem(
-                        icon = Icons.Filled.Audiotrack,
-                        count = audioAttachments.size,
-                        label = "段音频"
-                    )
-                }
-                if (videoAttachments.isNotEmpty()) {
-                    AttachmentCountItem(
-                        icon = Icons.Filled.VideoLibrary,
-                        count = videoAttachments.size,
-                        label = "段视频"
-                    )
                 }
             }
 
@@ -219,29 +365,6 @@ fun MemoryPreviewBottomSheet(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun AttachmentCountItem(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    count: Int,
-    label: String,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = "$count $label",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium
-        )
     }
 }
 

@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- 应用私有存储目录 -->
     <files-path name="files" path="." />
-    <!-- 应用私有缓存目录 -->
+    <files-path name="media" path="media" />
+    <files-path name="photos" path="media/photos" />
+    <files-path name="videos" path="media/videos" />
+    <files-path name="audios" path="media/audios" />
     <cache-path name="cache" path="." />
+    <cache-path name="video_cache" path="video_cache" />
+    <external-files-path name="external_files" path="." />
+    <external-files-path name="generated_videos" path="videos" />
 </paths>

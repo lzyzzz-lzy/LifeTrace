@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +24,8 @@ fun TopBar(
     subtitle: String? = null,
     showDelete: Boolean = false,
     onDelete: (() -> Unit)? = null,
+    showShare: Boolean = false,
+    onShare: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Row(
@@ -45,18 +48,32 @@ fun TopBar(
             }
         }
 
-        if (showDelete && onDelete != null) {
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = stringResource(id = R.string.top_bar_delete_trip_content_description),
-                )
+        Row {
+            // 分享按钮（MEMORY 模式下显示）
+            if (showShare && onShare != null) {
+                IconButton(onClick = onShare) {
+                    Icon(
+                        Icons.Filled.Share,
+                        contentDescription = "生成海报",
+                    )
+                }
             }
-        } else {
-            IconButton(
-                onClick = {/*todo 菜单*/},
-            ) {
-                Icon(Icons.Filled.MoreVert, contentDescription = null)
+
+            // 删除按钮
+            if (showDelete && onDelete != null) {
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = stringResource(id = R.string.top_bar_delete_trip_content_description),
+                    )
+                }
+            } else if (!showShare) {
+                // 菜单按钮（仅在没有其他按钮时显示）
+                IconButton(
+                    onClick = {/*todo 菜单*/},
+                ) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = null)
+                }
             }
         }
     }

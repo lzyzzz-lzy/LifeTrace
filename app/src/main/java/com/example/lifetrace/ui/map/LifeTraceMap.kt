@@ -280,27 +280,6 @@ private fun animateToBounds(map: AMap, points: List<TrackPointEntity>) {
     map.animateCamera(CameraUpdateFactory.newLatLngBounds(builder.build(), 120))
 }
 
-private fun buildCameraFitSignature(state: MapUiState): String {
-    return when (state.mode) {
-        MapMode.EXPLORE -> {
-            val shape = state.allTripsTrackPoints.joinToString(separator = "|") { points ->
-                val first = points.firstOrNull()
-                val last = points.lastOrNull()
-                "${points.size}:${first?.latitude},${first?.longitude}:${last?.latitude},${last?.longitude}"
-            }
-            "EXPLORE:$shape"
-        }
-
-        MapMode.MEMORY -> {
-            val first = state.focusedTripTrackPoints.firstOrNull()
-            val last = state.focusedTripTrackPoints.lastOrNull()
-            "MEMORY:${state.focusedTrip?.tripId}:${state.focusedTripTrackPoints.size}:${first?.latitude},${first?.longitude}:${last?.latitude},${last?.longitude}"
-        }
-
-        else -> state.mode.name
-    }
-}
-
 private fun followUser(map: AMap) {
     val location = map.myLocation ?: return
     map.animateCamera(
@@ -358,7 +337,7 @@ private fun renderMapState(
                     polylineIdToTripId = polylineIdToTripId,
                     clickablePolylineIds = clickablePolylineIds,
                     color = 0x554CAF50,
-                    width = 8f,
+                    width = 12f,
                     clickable = true,
                     zoomLevel = state.zoomLevel,
                 )
@@ -425,8 +404,10 @@ private fun renderTrackPoints(
         PolylineOptions()
             .addAll(latLngs)
             .width(width)
-            .color(color),
+            .color(color)
     )
+
+    //polyline.isClickable = clickable
 
     val id = polyline.id
     if (tripId != null) polylineIdToTripId[id] = tripId

@@ -1,23 +1,24 @@
 package com.example.lifetrace.ui.overlay
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.example.lifetrace.ui.overlay.OverlayState
-import java.io.File
+import androidx.compose.ui.layout.ContentScale
 
 /**
  * 全屏图片预览（Overlay 版本）
@@ -27,21 +28,29 @@ fun FullScreenImagePreview(
     uri: String,
     onDismiss: () -> Unit,
 ) {
+    // 背景层：点击关闭（无涟漪）
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .clickable(onClick = onDismiss)
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { onDismiss() }
     ) {
-        // 图片
+        // 图片层：吃掉点击，避免点到图片也关闭
         AsyncImage(
-            model = File(uri),
+            model = uri, // ✅ 同时支持 content://、file://、绝对路径
             contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = androidx.compose.ui.layout.ContentScale.Fit
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { /* eat click */ },
+            contentScale = ContentScale.Fit
         )
 
-        // 关闭按钮
         IconButton(
             onClick = onDismiss,
             modifier = Modifier

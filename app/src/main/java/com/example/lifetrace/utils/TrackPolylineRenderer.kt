@@ -87,8 +87,9 @@ class TrackPolylineRenderer(
             .addAll(latLngs)
             .width(config.mainWidth)
             .color(config.mainColor)
+            //.clickable(true)
 
-        // 尝试启用“圆角/圆端点”（如果 SDK 支持）
+        // 尝试启用”圆角/圆端点”（如果 SDK 支持）
         trySetRoundJoinCap(outlineOpts)
         trySetRoundJoinCap(mainOpts)
 

@@ -23,10 +23,6 @@ class MapViewModel(
     private val _uiState = MutableStateFlow(MapUiState())
     val uiState: StateFlow<MapUiState> = _uiState
 
-    // 选中的回忆节点（用于显示详情）
-    private val _selectedMemoryNode = MutableStateFlow<MemoryNodeEntity?>(null)
-    val selectedMemoryNode: StateFlow<MemoryNodeEntity?> = _selectedMemoryNode
-
     private var currentTripPointsJob: Job? = null
     private var focusedTripDataJob: Job? = null
     // 存储当前正在记录的 Trip，用于 RECORDING_MEMORY 模式
@@ -182,13 +178,11 @@ class MapViewModel(
 
     // 点击回忆节点
     fun onMemoryNodeClicked(node: MemoryNodeEntity) {
-        _selectedMemoryNode.value = node
         _uiState.update { it.copy(selectedMemoryNode = node) }
     }
 
     // 关闭回忆详情
     fun dismissMemoryNodeDetail() {
-        _selectedMemoryNode.value = null
         _uiState.update { it.copy(selectedMemoryNode = null) }
     }
 

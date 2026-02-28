@@ -49,7 +49,6 @@ fun AudioRecordingScreen(
     var showReview by remember { mutableStateOf(false) }
     var startTime by remember { mutableStateOf(0L) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var permissionRequested by remember { mutableStateOf(false) }
 
     // 权限 Launcher
     val scope = rememberCoroutineScope()
@@ -82,8 +81,6 @@ fun AudioRecordingScreen(
     }
 
     // 开始录音
-    val scope1 = rememberCoroutineScope()
-
     fun startRecording() {
         try {
             outputFile = mediaStorageManager.getAudioFile(0L)
@@ -108,7 +105,7 @@ fun AudioRecordingScreen(
             e.printStackTrace()
             errorMessage = "录音启动失败: ${e.message}"
 
-            scope1.launch {
+            scope.launch {
                 delay(2000)
                 // 这里写你想做的事，比如清掉错误提示
                 // errorMessage = null
