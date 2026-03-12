@@ -18,9 +18,14 @@ import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.TrackPointEntity
 import com.example.lifetrace.data.database.repository.MemoryAttachmentRepository
 import com.example.lifetrace.state.MapMode
+import com.example.lifetrace.ui.components.AboutDialog
+import com.example.lifetrace.ui.components.AiSettingsDialog
+import com.example.lifetrace.ui.components.AppIntroDialog
 import com.example.lifetrace.ui.components.BottomControlPanel
+import com.example.lifetrace.ui.components.HelpDialog
 import com.example.lifetrace.ui.components.MemoryEditorBottomSheet
 import com.example.lifetrace.ui.components.MemoryPreviewBottomSheet
+import com.example.lifetrace.ui.components.PrivacyDialog
 import com.example.lifetrace.ui.components.SystemCameraLauncher
 import com.example.lifetrace.ui.components.SystemCameraMode
 import com.example.lifetrace.ui.components.TopBar
@@ -48,6 +53,13 @@ fun HomeScreen(
 
     // ✅ 顶层相机状态（走 SystemCameraLauncher）
     var cameraMode by remember { mutableStateOf<SystemCameraMode?>(null) }
+
+    // ✅ 菜单对话框状态
+    var showAppIntro by remember { mutableStateOf(false) }
+    var showAiSettings by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
+    var showPrivacy by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
 
     var currentLat by remember { mutableStateOf(0.0) }
     var currentLng by remember { mutableStateOf(0.0) }
@@ -149,6 +161,11 @@ fun HomeScreen(
                     overlayState = OverlayState.ShareTrip(trip.tripId)
                 }
             },
+            onAppIntro = { showAppIntro = true },
+            onAiSettings = { showAiSettings = true },
+            onHelp = { showHelp = true },
+            onPrivacy = { showPrivacy = true },
+            onAbout = { showAbout = true },
             modifier = Modifier.align(Alignment.TopCenter),
         )
 
@@ -242,6 +259,32 @@ fun HomeScreen(
             onAudioRecorded = { uri, duration ->
                 viewModel.addAudioAttachment(uri, duration)
             }
+        )
+
+        // 8) 菜单对话框
+        AppIntroDialog(
+            isVisible = showAppIntro,
+            onDismiss = { showAppIntro = false }
+        )
+
+        AiSettingsDialog(
+            isVisible = showAiSettings,
+            onDismiss = { showAiSettings = false }
+        )
+
+        HelpDialog(
+            isVisible = showHelp,
+            onDismiss = { showHelp = false }
+        )
+
+        PrivacyDialog(
+            isVisible = showPrivacy,
+            onDismiss = { showPrivacy = false }
+        )
+
+        AboutDialog(
+            isVisible = showAbout,
+            onDismiss = { showAbout = false }
         )
     }
 }

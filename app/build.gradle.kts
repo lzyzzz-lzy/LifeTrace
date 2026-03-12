@@ -19,6 +19,10 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 火山引擎豆包 API 配置（注意：生产环境应使用安全存储）
+        buildConfigField("String", "DOUBAO_API_KEY", "\"e7c9096f-2f84-433d-880e-4b56e1aa87b6\"")
+        buildConfigField("String", "DOUBAO_MODEL_ID", "\"doubao-seed-2-0-pro-260215\"")
     }
 
     buildTypes {
@@ -39,6 +43,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -98,6 +103,9 @@ dependencies {
 
     // OkHttp (网络请求)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // ExifInterface (图片方向处理)
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:1.8.1")
 }

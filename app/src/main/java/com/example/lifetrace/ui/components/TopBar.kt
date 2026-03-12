@@ -9,11 +9,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -26,8 +32,15 @@ fun TopBar(
     onDelete: (() -> Unit)? = null,
     showShare: Boolean = false,
     onShare: (() -> Unit)? = null,
+    onAppIntro: (() -> Unit)? = null,
+    onAiSettings: (() -> Unit)? = null,
+    onHelp: (() -> Unit)? = null,
+    onPrivacy: (() -> Unit)? = null,
+    onAbout: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    var showMenu by remember { mutableStateOf(false) }
+
     Row(
         modifier = modifier
             .fillMaxSize()
@@ -70,9 +83,51 @@ fun TopBar(
             } else if (!showShare) {
                 // 菜单按钮（仅在没有其他按钮时显示）
                 IconButton(
-                    onClick = {/*todo 菜单*/},
+                    onClick = { showMenu = true },
                 ) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = null)
+                    Icon(Icons.Filled.MoreVert, contentDescription = "菜单")
+                }
+
+                // 下拉菜单
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("应用介绍") },
+                        onClick = {
+                            showMenu = false
+                            onAppIntro?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("AI 设置") },
+                        onClick = {
+                            showMenu = false
+                            onAiSettings?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("使用帮助") },
+                        onClick = {
+                            showMenu = false
+                            onHelp?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("隐私与权限说明") },
+                        onClick = {
+                            showMenu = false
+                            onPrivacy?.invoke()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("关于") },
+                        onClick = {
+                            showMenu = false
+                            onAbout?.invoke()
+                        }
+                    )
                 }
             }
         }

@@ -23,9 +23,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.example.lifetrace.service.CaptionService
 import com.example.lifetrace.share.ShareManager
 import com.example.lifetrace.share.model.MediaSection
 import com.example.lifetrace.share.model.ShareMediaItem
+import com.example.lifetrace.ui.components.ApiKeyConfigDialog
+import com.example.lifetrace.ui.components.CaptionBottomSheet
+import com.example.lifetrace.ui.components.copyCaptionToClipboard
 
 /**
  * 分享旅程页面
@@ -42,6 +46,10 @@ fun ShareTripScreen(
 
     // 保存结果状态
     var saveResult by remember { mutableStateOf<String?>(null) }
+
+    // API Key 配置对话框状态
+    var showApiKeyDialog by remember { mutableStateOf(false) }
+    val captionService = remember { CaptionService(context) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -158,10 +166,18 @@ fun ShareTripScreen(
             if (uiState.hasSelection()) {
                 SelectionBar(
                     selectedCount = uiState.getSelectedCount(),
-                    isOptimizing = uiState.isOptimizing,
-                    onOptimize = {
-                        // TODO: 实现 AI 优化功能
-                        Toast.makeText(context, "AI 优化功能开发中", Toast.LENGTH_SHORT).show()
+                    isGeneratingCaption = uiState.isGeneratingCaption,
+                    onGenerateCaption = {
+                        if (!viewModel.isApiConfigured()) {
+                            // 显示 API Key 配置对话框
+                            showApiKeyDialog = true
+                        } else if (uiState.captionOptions.isNotEmpty()) {
+                            // 已有缓存，直接显示
+                            viewModel.setShowCaptionDialog(true)
+                        } else {
+                            // 无缓存，生成
+                            viewModel.generateCaptions()
+                        }
                     },
                     onSave = {
                         val selectedItems = viewModel.getSelectedItems()
@@ -191,6 +207,37 @@ fun ShareTripScreen(
             }
         }
     }
+
+    // AI 文案生成弹窗
+    CaptionBottomSheet(
+        isVisible = uiState.showCaptionDialog,
+        isLoading = uiState.isGeneratingCaption,
+        captions = uiState.captionOptions,
+        selectedCaption = uiState.selectedCaption,
+        currentStyle = uiState.currentCaptionStyle,
+        error = uiState.captionError,
+        onDismiss = { viewModel.setShowCaptionDialog(false) },
+        onStyleChange = { viewModel.setCurrentCaptionStyle(it) },
+        onCaptionSelect = { viewModel.setSelectedCaption(it) },
+        onRegenerate = { viewModel.regenerateCaptions() },
+        onCopy = { caption ->
+            copyCaptionToClipboard(context, caption)
+        }
+    )
+
+    // API Key 配置对话框
+    ApiKeyConfigDialog(
+        isVisible = showApiKeyDialog,
+        currentApiKey = "",
+        onSave = { apiKey ->
+            captionService.saveApiConfig(apiKey)
+            showApiKeyDialog = false
+            Toast.makeText(context, "API Key 已保存", Toast.LENGTH_SHORT).show()
+            // 保存后自动开始生成
+            viewModel.generateCaptions()
+        },
+        onDismiss = { showApiKeyDialog = false }
+    )
 }
 
 /**
@@ -342,8 +389,8 @@ private fun MediaItem(
 @Composable
 private fun SelectionBar(
     selectedCount: Int,
-    isOptimizing: Boolean,
-    onOptimize: () -> Unit,
+    isGeneratingCaption: Boolean,
+    onGenerateCaption: () -> Unit,
     onSave: () -> Unit,
     onShare: () -> Unit
 ) {
@@ -369,25 +416,25 @@ private fun SelectionBar(
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // 优化按钮
+                // 文案按钮
                 OutlinedButton(
-                    onClick = onOptimize,
-                    enabled = !isOptimizing
+                    onClick = onGenerateCaption,
+                    enabled = !isGeneratingCaption
                 ) {
-                    if (isOptimizing) {
+                    if (isGeneratingCaption) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp
                         )
                     } else {
                         Icon(
-                            Icons.Filled.AutoFixHigh,
+                            Icons.Filled.Edit,
                             contentDescription = null,
                             modifier = Modifier.size(18.dp)
                         )
                     }
                     Spacer(Modifier.width(4.dp))
-                    Text("优化")
+                    Text("文案")
                 }
 
                 // 保存按钮
