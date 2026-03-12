@@ -11,7 +11,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 
 /**
  * 图片预处理服务
@@ -52,7 +54,7 @@ class ImagePreprocessor(private val context: Context) {
             Log.d(TAG, "开始预处理图片: $uri")
 
             // 1. 读取图片
-            val inputStream = context.contentResolver.openInputStream(uri)
+            val inputStream = openInputStreamSafely(uri)
             if (inputStream == null) {
                 return@withContext PreprocessResult(
                     success = false,
@@ -88,7 +90,7 @@ class ImagePreprocessor(private val context: Context) {
             }
 
             // 4. 重新读取并缩放图片
-            val inputStream2 = context.contentResolver.openInputStream(uri)
+            val inputStream2 = openInputStreamSafely(uri)
             val loadOptions = BitmapFactory.Options().apply {
                 inSampleSize = sampleSize
             }
@@ -129,6 +131,8 @@ class ImagePreprocessor(private val context: Context) {
             val outputStream = ByteArrayOutputStream()
             var quality = INITIAL_QUALITY
             var compressedSize: Int
+            val finalWidth = bitmap.width
+            val finalHeight = bitmap.height
 
             do {
                 outputStream.reset()
@@ -152,8 +156,8 @@ class ImagePreprocessor(private val context: Context) {
                 success = true,
                 base64Data = base64WithPrefix,
                 mimeType = "image/jpeg",
-                width = bitmap.width,
-                height = bitmap.height,
+                width = finalWidth,
+                height = finalHeight,
                 fileSize = compressedSize
             )
 
@@ -180,7 +184,7 @@ class ImagePreprocessor(private val context: Context) {
      */
     private fun rotateImageIfRequired(context: Context, uri: Uri, bitmap: Bitmap): Bitmap {
         try {
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return bitmap
+            val inputStream = openInputStreamSafely(uri) ?: return bitmap
             val exif = androidx.exifinterface.media.ExifInterface(inputStream)
             inputStream.close()
 
@@ -210,6 +214,32 @@ class ImagePreprocessor(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "读取 Exif 失败", e)
             return bitmap
+        }
+    }
+
+    /**
+     * 优先按 content resolver 打开流，失败时回退到文件路径。
+     *
+     * 兼容以下格式：
+     * 1) content://xxx
+     * 2) file:///xxx
+     * 3) /data/user/... 这种无 scheme 的绝对路径
+     */
+    private fun openInputStreamSafely(uri: Uri): InputStream? {
+        return try {
+            context.contentResolver.openInputStream(uri)
+        } catch (e: Exception) {
+            val file = when {
+                uri.scheme == null || uri.scheme.isNullOrBlank() -> File(uri.toString())
+                uri.scheme.equals("file", ignoreCase = true) -> File(uri.path ?: "")
+                else -> null
+            }
+
+            if (file != null && file.exists() && file.isFile) {
+                FileInputStream(file)
+            } else {
+                null
+            }
         }
     }
 
