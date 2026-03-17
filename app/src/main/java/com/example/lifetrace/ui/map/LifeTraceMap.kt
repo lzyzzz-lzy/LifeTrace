@@ -28,6 +28,8 @@ import com.example.lifetrace.R
 import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.TrackPointEntity
 import com.example.lifetrace.data.database.entity.TripEntity
+import com.example.lifetrace.state.CameraAction
+import com.example.lifetrace.state.CameraMode
 import com.example.lifetrace.state.MapMode
 import com.example.lifetrace.state.MapUiState
 import com.example.lifetrace.utils.TrackSmoothingUtils
@@ -41,6 +43,7 @@ fun LifeTraceMap(
     onMapLongPressAddMemory: (Double, Double) -> Unit,
     onCurrentLocationChanged: (Double, Double) -> Unit,
     onMemoryNodeClicked: (MemoryNodeEntity) -> Unit = {},
+    onCameraActionExecuted: () -> Unit = {},
     modifier: Modifier = Modifier,
     isNightMode: Boolean = false,
 ) {
@@ -74,8 +77,8 @@ fun LifeTraceMap(
     var lastLng by remember { mutableStateOf(0.0) }
     var lastCameraFitSignature by remember { mutableStateOf("") }
     var lastMapMode by remember { mutableStateOf<MapMode?>(null) }
-    var hasUserManuallyMovedMap by remember { mutableStateOf(false) }
     var isFirstEnterMode by remember { mutableStateOf<MapMode?>(null) }
+    var lastPendingActionSignature by remember { mutableStateOf("") }
 
     DisposableEffect(lifecycleOwner, mapView) {
         var isDestroyed = false
@@ -124,7 +127,6 @@ fun LifeTraceMap(
             polylineIdToTripId = polylineIdToTripId,
             clickablePolylineIds = clickablePolylineIds,
             markerIdToMemoryNode = markerIdToMemoryNode,
-            onUserManuallyMovedMap = { hasUserManuallyMovedMap = true },
         )
 
         aMap.setOnMyLocationChangeListener { location ->
@@ -150,7 +152,6 @@ fun LifeTraceMap(
         val isFirstEnter = isFirstEnterMode != currentMode
         if (isFirstEnter) {
             isFirstEnterMode = currentMode
-            hasUserManuallyMovedMap = false
         }
 
         // 传递上一个模式，用于判断是否需要清除旧数据
@@ -162,7 +163,6 @@ fun LifeTraceMap(
             clickablePolylineIds = clickablePolylineIds,
             markerIdToMemoryNode = markerIdToMemoryNode,
             polylineRenderer = polylineRenderer,
-            hasUserManuallyMovedMap = hasUserManuallyMovedMap,
         )
 
         // 更新最后模式（在渲染之后）
@@ -170,9 +170,27 @@ fun LifeTraceMap(
 
         aMap.mapType = if (isNightMode) AMap.MAP_TYPE_NIGHT else AMap.MAP_TYPE_NORMAL
 
-        // 只在首次进入模式时调整相机（避免频繁调整覆盖用户操作）
-        if (isFirstEnter) {
+        // 镜头控制：分离为两部分
+        // 1. 首次进入模式时的镜头适配（仅 EXPLORE 和 MEMORY 模式）
+        if (isFirstEnter && mapUiState.mode in listOf(MapMode.EXPLORE, MapMode.MEMORY)) {
             fitCameraForState(aMap, mapUiState)
+        }
+
+        // 2. 处理 pendingCameraAction（一次性动作）
+        val actionSignature = mapUiState.pendingCameraAction?.hashCode().toString()
+        if (actionSignature != lastPendingActionSignature && mapUiState.pendingCameraAction != null) {
+            executeCameraAction(aMap, mapUiState.pendingCameraAction!!, mapUiState)
+            lastPendingActionSignature = actionSignature
+            // 通知 ViewModel 动作已执行
+            onCameraActionExecuted()
+        }
+    }
+
+    // RECORDING 模式下持续跟随（独立的 LaunchedEffect）
+    LaunchedEffect(mapUiState.cameraMode, mapUiState.currentTrackPoints.lastOrNull()) {
+        if (mapUiState.cameraMode == CameraMode.FOLLOWING &&
+            mapUiState.mode == MapMode.RECORDING) {
+            followUser(aMap)
         }
     }
 
@@ -188,7 +206,6 @@ private fun setupMap(
     polylineIdToTripId: Map<String, Long>,
     clickablePolylineIds: Set<String>,
     markerIdToMemoryNode: MutableMap<String, MemoryNodeEntity>,
-    onUserManuallyMovedMap: () -> Unit,
 ) {
     aMap.uiSettings.apply {
         isZoomControlsEnabled = false
@@ -213,9 +230,6 @@ private fun setupMap(
         override fun onCameraChangeFinish(cameraPosition: CameraPosition?) {
             val zoom = cameraPosition?.zoom ?: aMap.cameraPosition?.zoom ?: 15f
             onMapMoved(movedByUserGesture, zoom)
-            if (movedByUserGesture) {
-                onUserManuallyMovedMap()
-            }
             movedByUserGesture = false
         }
     })
@@ -290,6 +304,27 @@ private fun followUser(map: AMap) {
     )
 }
 
+/**
+ * 执行一次性镜头动作
+ */
+private fun executeCameraAction(map: AMap, action: CameraAction, state: MapUiState) {
+    when (action) {
+        is CameraAction.FitToBounds -> animateToBounds(map, action.points)
+        is CameraAction.FollowUserOnce -> {
+            val location = map.myLocation ?: return
+            map.animateCamera(
+                CameraUpdateFactory.newLatLngZoom(
+                    LatLng(location.latitude, location.longitude),
+                    action.zoom,
+                ),
+            )
+        }
+        is CameraAction.MoveToTrip -> {
+            animateToBounds(map, state.focusedTripTrackPoints)
+        }
+    }
+}
+
 private fun renderMapState(
     map: AMap,
     state: MapUiState,
@@ -298,7 +333,6 @@ private fun renderMapState(
     clickablePolylineIds: MutableSet<String>,
     markerIdToMemoryNode: MutableMap<String, MemoryNodeEntity>,
     polylineRenderer: TrackPolylineRenderer,
-    hasUserManuallyMovedMap: Boolean,
 ) {
     // 判断是否需要清除地图上的旧数据
     // 1. 模式切换时（从其他模式切换到当前模式）
@@ -363,7 +397,6 @@ private fun renderMapState(
                 map = map,
                 state = state,
                 polylineRenderer = polylineRenderer,
-                hasUserManuallyMovedMap = hasUserManuallyMovedMap,
             )
         }
 
@@ -372,7 +405,6 @@ private fun renderMapState(
                 map = map,
                 state = state,
                 polylineRenderer = polylineRenderer,
-                hasUserManuallyMovedMap = hasUserManuallyMovedMap,
             )
             renderMemoryNodesByZoom(map, state.focusedTripMemoryNodes, state.zoomLevel, markerIdToMemoryNode)
         }
@@ -418,12 +450,12 @@ private fun renderTrackPoints(
 
 /**
  * 渲染 RECORDING 模式：当前录制轨迹
+ * 注意：镜头跟随已移至独立的 LaunchedEffect，此处仅负责轨迹渲染
  */
 private fun renderRecordingTrack(
     map: AMap,
     state: MapUiState,
     polylineRenderer: TrackPolylineRenderer,
-    hasUserManuallyMovedMap: Boolean = false,
 ) {
     val config = TrackSmoothingUtils.getRenderConfig(
         zoomLevel = state.zoomLevel,
@@ -436,11 +468,7 @@ private fun renderRecordingTrack(
         points = state.currentTrackPoints,
         zoomLevel = state.zoomLevel,
     )
-
-    // 只在用户没有手动移动地图时才跟随
-    if (state.followUser && !hasUserManuallyMovedMap) {
-        followUser(map)
-    }
+    // 镜头跟随逻辑已移至 LifeTraceMap Composable 中的独立 LaunchedEffect
 }
 
 /**
@@ -549,19 +577,45 @@ private fun renderAllTrips(
     allTripsTrackPoints: List<List<TrackPointEntity>>,
     polylineIdToTripId: MutableMap<String, Long>,
     clickablePolylineIds: MutableSet<String>,
-    color: Int = 0x884CAF50.toInt(),
-    width: Float = 10f,
-    clickable: Boolean = true,
+    focusedTripId: Long? = null,
+    color: Int? = null,
+    width: Float? = null,
+    clickable: Boolean? = null,
     zoomLevel: Float = 15f,
 ) {
     allTripsTrackPoints.forEachIndexed { index, points ->
         val tripId = allTrips.getOrNull(index)?.tripId ?: return@forEachIndexed
+
+        // 检查是否聚焦 trip
+        val isFocused = tripId == focusedTripId
+        val layer = if (isFocused) {
+            TrackSmoothingUtils.TrackVisualLayer.FOCUSED_TRIP
+        } else {
+            TrackSmoothingUtils.TrackVisualLayer.BACKGROUND_TRIP
+        }
+
+        val config = TrackSmoothingUtils.getRenderConfigForLayer(
+            zoomLevel = zoomLevel,
+            layer = layer
+        )
+
+        val latLngs = TrackSmoothingUtils.processTrack(
+            rawPoints = points,
+            zoomLevel = zoomLevel,
+            enableChaikin = layer != TrackSmoothingUtils.TrackVisualLayer.RECORDING
+        )
+
+        // 如果调用时指定了 color/width/clickable，则使用它们，否则使用配置中的值
+        val finalColor = color ?: config.mainColor
+        val finalWidth = width ?: config.mainWidth
+        val finalClickable = clickable ?: config.clickable
+
         renderTrackPoints(
             map = map,
             points = points,
-            color = color,
-            width = width,
-            clickable = clickable,
+            color = finalColor,
+            width = finalWidth,
+            clickable = finalClickable,
             tripId = tripId,
             polylineIdToTripId = polylineIdToTripId,
             clickablePolylineIds = clickablePolylineIds,

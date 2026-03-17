@@ -7,6 +7,8 @@ import com.example.lifetrace.data.database.entity.TripEntity
 import com.example.lifetrace.data.database.repository.MemoryNodeRepository
 import com.example.lifetrace.data.database.repository.TrackPointRepository
 import com.example.lifetrace.data.database.repository.TripRepository
+import com.example.lifetrace.state.CameraAction
+import com.example.lifetrace.state.CameraMode
 import com.example.lifetrace.state.MapMode
 import com.example.lifetrace.state.MapUiState
 import kotlinx.coroutines.Job
@@ -31,9 +33,21 @@ class MapViewModel(
     fun onAppStart(hasActiveTrip: Boolean) {
         _uiState.update {
             if (hasActiveTrip) {
-                it.copy(mode = MapMode.RECORDING, followUser = true, showAllTrips = false, zoomLevel = 17f)
+                it.copy(
+                    mode = MapMode.RECORDING,
+                    cameraMode = CameraMode.FOLLOWING,
+                    pendingCameraAction = CameraAction.FollowUserOnce(17f),
+                    showAllTrips = false,
+                    zoomLevel = 17f
+                )
             } else {
-                it.copy(mode = MapMode.EXPLORE, followUser = false, showAllTrips = true, zoomLevel = 15f)
+                it.copy(
+                    mode = MapMode.EXPLORE,
+                    cameraMode = CameraMode.FREE,
+                    pendingCameraAction = null,
+                    showAllTrips = true,
+                    zoomLevel = 15f
+                )
             }
         }
 
@@ -93,7 +107,8 @@ class MapViewModel(
             it.copy(
                 mode = if (isRecording) MapMode.RECORDING_MEMORY else MapMode.MEMORY,
                 focusedTrip = trip,
-                followUser = false,
+                cameraMode = CameraMode.FREE,  // 聚焦后允许自由浏览
+                pendingCameraAction = CameraAction.MoveToTrip(trip.tripId),  // 一次性聚焦动作
                 showAllTrips = true,
                 showMemoryNodes = true,
             )
@@ -106,7 +121,8 @@ class MapViewModel(
         _uiState.update {
             it.copy(
                 mode = MapMode.RECORDING,
-                followUser = true,
+                cameraMode = CameraMode.FOLLOWING,  // 恢复跟随
+                pendingCameraAction = CameraAction.FollowUserOnce(17f),  // 首次定位
                 focusedTrip = null,
                 showAllTrips = false,
                 showMemoryNodes = true,
@@ -122,7 +138,8 @@ class MapViewModel(
         _uiState.update {
             it.copy(
                 mode = MapMode.RECORDING_MEMORY,
-                followUser = false,
+                cameraMode = CameraMode.FREE,  // 暂停时不跟随
+                pendingCameraAction = null,
                 focusedTrip = null,
                 showAllTrips = false,
                 showMemoryNodes = true,
@@ -138,7 +155,8 @@ class MapViewModel(
         _uiState.update {
             it.copy(
                 mode = MapMode.EXPLORE,
-                followUser = false,
+                cameraMode = CameraMode.FREE,
+                pendingCameraAction = null,  // EXPLORE 的镜头适配由 LifeTraceMap 处理
                 focusedTrip = null,
                 showAllTrips = true,
                 showMemoryNodes = false,
@@ -154,17 +172,44 @@ class MapViewModel(
 
         if (!fromUserGesture) return
 
-        _uiState.update {
-            if (it.mode == MapMode.RECORDING) {
-                // 切换到 RECORDING_MEMORY 时，设置 focusedTrip 为当前记录的 Trip
-                it.copy(mode = MapMode.RECORDING_MEMORY, followUser = false, focusedTrip = currentRecordingTrip)
-            } else it
+        // 用户手势后，立即停止跟随
+        _uiState.update { state ->
+            when (state.mode) {
+                MapMode.RECORDING -> {
+                    // 切换到 RECORDING_MEMORY 模式，停止跟随
+                    state.copy(
+                        mode = MapMode.RECORDING_MEMORY,
+                        cameraMode = CameraMode.FREE,  // 关键：停止跟随
+                        focusedTrip = currentRecordingTrip
+                    )
+                }
+                else -> state  // 其他模式保持不变
+            }
         }
 
         // 进入 RECORDING_MEMORY 模式时，加载当前 trip 的回忆节点
         if (_uiState.value.mode == MapMode.RECORDING_MEMORY && currentRecordingTrip != null) {
             loadFocusedTripMemoryNodes(currentRecordingTrip!!)
         }
+    }
+
+    /**
+     * 用户点击"回到我"按钮
+     */
+    fun onReturnToMeClicked() {
+        _uiState.update {
+            it.copy(
+                cameraMode = CameraMode.FOLLOWING,
+                pendingCameraAction = CameraAction.FollowUserOnce(17f)
+            )
+        }
+    }
+
+    /**
+     * 镜头动作执行后清除
+     */
+    fun onCameraActionExecuted() {
+        _uiState.update { it.copy(pendingCameraAction = null) }
     }
 
     private fun loadFocusedTripMemoryNodes(trip: TripEntity) {

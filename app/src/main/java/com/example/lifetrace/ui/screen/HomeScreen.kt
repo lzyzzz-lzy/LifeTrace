@@ -3,6 +3,7 @@ package com.example.lifetrace.ui.screen
 import android.location.Location
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -12,13 +13,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.lifetrace.data.database.entity.MemoryAttachmentEntity
 import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.TrackPointEntity
 import com.example.lifetrace.data.database.repository.MemoryAttachmentRepository
+import com.example.lifetrace.state.CameraMode
 import com.example.lifetrace.state.MapMode
 import com.example.lifetrace.ui.components.AboutDialog
+import com.example.lifetrace.ui.components.ReturnToMeButton
 import com.example.lifetrace.ui.components.AiSettingsDialog
 import com.example.lifetrace.ui.components.AppIntroDialog
 import com.example.lifetrace.ui.components.BottomControlPanel
@@ -148,7 +152,20 @@ fun HomeScreen(
                 currentLat = lat
                 currentLng = lng
             },
+            onCameraActionExecuted = { mapViewModel.onCameraActionExecuted() },
         )
+
+        // 2) "回到我"按钮（仅 RECORDING + FREE 模式显示）
+        val showReturnToMeButton = mapUiState.mode == MapMode.RECORDING &&
+                mapUiState.cameraMode == CameraMode.FREE
+        if (showReturnToMeButton) {
+            ReturnToMeButton(
+                onClick = { mapViewModel.onReturnToMeClicked() },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 180.dp, end = 20.dp),
+            )
+        }
 
         // 2) 顶部栏
         TopBar(

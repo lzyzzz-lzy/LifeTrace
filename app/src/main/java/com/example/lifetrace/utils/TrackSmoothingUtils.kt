@@ -10,6 +10,24 @@ import kotlin.math.*
  */
 object TrackSmoothingUtils {
 
+    /**
+     * 轨迹视觉层级
+     */
+    enum class TrackVisualLayer {
+        RECORDING,          // 正在记录的轨迹（高亮、动态宽度）
+        FOCUSED_TRIP,       // 聚焦的历史轨迹（中等强调）
+        BACKGROUND_TRIP     // 背景历史轨迹（弱化、低干扰）
+    }
+
+    /**
+     * 简化的渲染配置（用于 renderAllTrips）
+     */
+    data class SimpleRenderConfig(
+        val mainColor: Int,
+        val mainWidth: Float,
+        val clickable: Boolean,
+    )
+
     data class TrackRenderConfig(
         val mainColor: Int,
         val outlineColor: Int,
@@ -212,7 +230,7 @@ object TrackSmoothingUtils {
         val mainWidth = calculateMainWidth(zoomLevel)
         val outlineWidth = mainWidth + 6f
 
-        // 描边颜色建议固定半透明黑，稳定且“像导航”
+        // 描边颜色建议固定半透明黑，稳定且”像导航”
         val outlineColor = 0xAA000000.toInt()
 
         return TrackRenderConfig(
@@ -223,6 +241,34 @@ object TrackSmoothingUtils {
             enableChaikin = false, // 默认先关，等你验证 RDP OK 再开
             chaikinIterations = 2,
         )
+    }
+
+    /**
+     * 根据视觉层级获取渲染配置（用于 renderAllTrips）
+     */
+    fun getRenderConfigForLayer(
+        zoomLevel: Float,
+        layer: TrackVisualLayer
+    ): SimpleRenderConfig {
+        val baseWidth = calculateMainWidth(zoomLevel)
+
+        return when (layer) {
+            TrackVisualLayer.RECORDING -> SimpleRenderConfig(
+                mainColor = 0xFF2196F3.toInt(),  // 蓝色，高亮
+                mainWidth = baseWidth,
+                clickable = true
+            )
+            TrackVisualLayer.FOCUSED_TRIP -> SimpleRenderConfig(
+                mainColor = 0xFF2E7D32.toInt(),  // 深绿
+                mainWidth = baseWidth * 0.9f,
+                clickable = true
+            )
+            TrackVisualLayer.BACKGROUND_TRIP -> SimpleRenderConfig(
+                mainColor = 0x664CAF50.toInt(),  // 40% 透明度绿色
+                mainWidth = (baseWidth * 0.5f).coerceIn(4f, 10f),  // 更细
+                clickable = true
+            )
+        }
     }
 
     private fun calculateMainWidth(zoomLevel: Float): Float {
