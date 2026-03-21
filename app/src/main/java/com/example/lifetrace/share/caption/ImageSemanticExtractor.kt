@@ -44,7 +44,7 @@ class ImageSemanticExtractor(
      * @return 视觉旅程摘要
      */
     suspend fun extract(candidateImages: List<CandidateImageItem>): VisualTripSummary {
-        Log.d(TAG, "=== 阶段 C: 图片语义抽取开始 ===")
+        Log.d(TAG, "=== Step 4: 图片视觉分析开始 ===")
         Log.d(TAG, "候选图片数量: ${candidateImages.size}")
 
         if (candidateImages.isEmpty()) {
@@ -77,7 +77,7 @@ class ImageSemanticExtractor(
             // 3. 汇总多图结果
             val summary = aggregateResults(analysisResults)
 
-            Log.d(TAG, "=== 阶段 C: 图片语义抽取完成 ===")
+            Log.d(TAG, "=== Step 4: 图片视觉分析完成 ===")
             Log.d(TAG, "主题句: ${summary.visualThemeSentence}")
             Log.d(TAG, "主要场景: ${summary.mainScenes}")
             Log.d(TAG, "整体氛围: ${summary.overallMood}")
@@ -85,7 +85,7 @@ class ImageSemanticExtractor(
             return summary
 
         } catch (e: Exception) {
-            Log.e(TAG, "阶段 C 图片分析失败", e)
+            Log.e(TAG, "Step 4 图片视觉分析失败", e)
             return VisualTripSummary.EMPTY
         }
     }
