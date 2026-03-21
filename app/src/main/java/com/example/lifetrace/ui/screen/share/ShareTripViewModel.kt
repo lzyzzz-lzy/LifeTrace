@@ -16,15 +16,8 @@ import com.example.lifetrace.data.database.repository.TripRepository
 import com.example.lifetrace.service.CaptionService
 import com.example.lifetrace.service.CaptionStyle
 import com.example.lifetrace.service.TripCaptionData
-import com.example.lifetrace.share.caption.CaptionInputCollector
-import com.example.lifetrace.share.caption.FinalCaptionGenerator
-import com.example.lifetrace.share.caption.ImageSemanticExtractor
-import com.example.lifetrace.share.caption.TextQualityFilter
-import com.example.lifetrace.share.model.CaptionGenerationStage
-import com.example.lifetrace.share.model.FinalCaptionResult
-import com.example.lifetrace.share.model.MediaSection
-import com.example.lifetrace.share.model.MediaType
-import com.example.lifetrace.share.model.ShareMediaItem
+import com.example.lifetrace.share.caption.*
+import com.example.lifetrace.share.model.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -34,6 +27,15 @@ import java.util.*
 
 /**
  * 分享旅程页面 ViewModel
+ *
+ * 使用 7 步流水线生成文案：
+ * Step 1: 收集 Trip 上下文
+ * Step 2: 规则预过滤
+ * Step 3: AI 文本筛选（可选）
+ * Step 4: 图片视觉分析
+ * Step 5: 构建语义摘要
+ * Step 6: 生成最终文案
+ * Step 7: 结果清洗
  */
 class ShareTripViewModel(
     application: Application,
@@ -45,17 +47,25 @@ class ShareTripViewModel(
     private val attachmentRepository: MemoryAttachmentRepository
     private val captionService: CaptionService
 
-    // 四阶段服务
+    // ========== 7 步流水线服务 ==========
     private val inputCollector: CaptionInputCollector by lazy {
         CaptionInputCollector(getApplication(), tripRepository, memoryNodeRepository, attachmentRepository)
     }
     private val textQualityFilter: TextQualityFilter by lazy { TextQualityFilter() }
+    private val textSemanticRanker: TextSemanticRanker by lazy {
+        TextSemanticRanker(captionService.getVolcDoubaoApi())
+    }
     private val imageExtractor: ImageSemanticExtractor by lazy {
         ImageSemanticExtractor(getApplication(), captionService.getVolcDoubaoApi())
     }
+    private val promptInputAssembler: PromptInputAssembler by lazy { PromptInputAssembler() }
     private val finalGenerator: FinalCaptionGenerator by lazy {
         FinalCaptionGenerator(captionService.getVolcDoubaoApi())
     }
+    private val captionResultCleaner: CaptionResultCleaner by lazy { CaptionResultCleaner }
+
+    // AI 筛选开关
+    private val aiFilterEnabled: Boolean = false  // 暂时关闭，后续可配置
 
     private val _uiState = MutableStateFlow(ShareTripUiState())
     val uiState: StateFlow<ShareTripUiState> = _uiState
@@ -149,7 +159,7 @@ class ShareTripViewModel(
             },
             timestamp = node.timestamp,
             nodeId = node.id,
-            nodeTitle = node.text?.take(50) // 使用文字描述作为标题
+            nodeTitle = node.text?.take(50)
         )
     }
 
@@ -162,6 +172,8 @@ class ShareTripViewModel(
         val location = node.text?.take(20) ?: "记忆点"
         return "$timeStr $location"
     }
+
+    // ========== 选择操作 ==========
 
     /**
      * 切换选择状态
@@ -209,6 +221,8 @@ class ShareTripViewModel(
         _uiState.update { it.copy(selectedIds = emptySet()) }
     }
 
+    // ========== 图片优化 ==========
+
     /**
      * 设置优化中状态
      */
@@ -226,6 +240,8 @@ class ShareTripViewModel(
             state.copy(optimizedMap = optimizedMap)
         }
     }
+
+    // ========== 文案生成（7 步流水线） ==========
 
     /**
      * 设置文案选项
@@ -247,7 +263,7 @@ class ShareTripViewModel(
     fun setCurrentCaptionStyle(style: CaptionStyle) {
         _uiState.update { it.copy(currentCaptionStyle = style) }
         // 切换风格后自动重新生成
-        if (_uiState.value.captionOptions.isNotEmpty()) {
+        if (_uiState.value.captionResult != null) {
             generateCaptions()
         }
     }
@@ -260,7 +276,7 @@ class ShareTripViewModel(
     }
 
     /**
-     * 生成文案（四阶段流水线）
+     * 生成文案（7 步流水线）
      */
     fun generateCaptions() {
         viewModelScope.launch {
@@ -269,55 +285,66 @@ class ShareTripViewModel(
                     isGeneratingCaption = true,
                     captionError = null,
                     captionOptions = emptyList(),
-                    selectedCaption = null
+                    selectedCaption = null,
+                    captionResult = null
                 )
             }
 
             try {
                 val state = _uiState.value
+                Log.d(TAG, "=== 7 步流水线开始 ===")
 
-                // ========== 阶段 A: 输入收集 ==========
-                updateStage(CaptionGenerationStage.PREPARING, "正在整理旅行信息...")
-                Log.d("ShareTripViewModel", "=== [主流程] 阶段 A: 输入收集 ===")
-
+                // ========== Step 1: 收集 Trip 上下文 ==========
+                updateStage(CaptionGenerationStage.PREPARING_INPUT, "正在收集旅行信息...")
                 val inputContext = inputCollector.collect(
                     tripId = tripId,
                     selectedItemIds = state.selectedIds,
                     style = state.currentCaptionStyle
                 )
+                Log.d(TAG, "[Step 1] 输入收集完成: 文字=${inputContext.validTextCount()}, 图片=${inputContext.selectedImageCount}")
 
-                Log.d("ShareTripViewModel", "输入收集完成: 文字=${inputContext.validTextCount()}, 图片=${inputContext.selectedImageCount()}")
+                // ========== Step 2: 规则预过滤 ==========
+                updateStage(CaptionGenerationStage.PRE_FILTERING_TEXT, "正在预筛选文字...")
+                val preFiltered = textQualityFilter.preFilter(inputContext)
+                Log.d(TAG, "[Step 2] 规则预筛选完成: 强=${preFiltered.acceptedStrong.size}, 弱=${preFiltered.acceptedWeak.size}")
 
-                // ========== 阶段 B: 文字筛选 ==========
-                updateStage(CaptionGenerationStage.FILTERING_TEXT, "正在筛选备注内容...")
-                Log.d("ShareTripViewModel", "=== [主流程] 阶段 B: 文字筛选 ===")
+                // ========== Step 3: AI 文本筛选（可选） ==========
+                val filteredTexts: SemanticFilteredTextCollection
+                if (aiFilterEnabled && preFiltered.getAllAccepted().size > 3) {
+                    updateStage(CaptionGenerationStage.AI_FILTERING_TEXT, "正在智能评估文字...")
+                    filteredTexts = textSemanticRanker.rank(preFiltered, inputContext.tripTitle, state.currentCaptionStyle)
+                    Log.d(TAG, "[Step 3] AI 筛选完成: 高=${filteredTexts.highQuality.size}, 中=${filteredTexts.mediumQuality.size}")
+                } else {
+                    Log.d(TAG, "[Step 3] 跳过 AI 筛选（未启用或文本数量较少）")
+                    filteredTexts = preFiltered.toSemanticCollection()
+                }
 
-                val filteredTexts = textQualityFilter.filter(inputContext)
-
-                Log.d("ShareTripViewModel", "文字筛选完成: 高质量=${filteredTexts.highQuality.size}, 中=${filteredTexts.mediumQuality.size}, 低=${filteredTexts.lowQuality.size}")
-
-                // ========== 阶段 C: 图片分析 ==========
+                // ========== Step 4: 图片视觉分析 ==========
                 updateStage(CaptionGenerationStage.ANALYZING_IMAGES, "正在理解图片内容...")
-                Log.d("ShareTripViewModel", "=== [主流程] 阶段 C: 图片分析 ===")
-
                 val visualSummary = imageExtractor.extract(inputContext.candidateImages)
+                Log.d(TAG, "[Step 4] 图片分析完成: 主题=${visualSummary.visualThemeSentence}")
 
-                Log.d("ShareTripViewModel", "图片分析完成: 主题=${visualSummary.visualThemeSentence}")
-
-                // ========== 阶段 D: 最终生成 ==========
-                updateStage(CaptionGenerationStage.GENERATING_CAPTION, "正在生成分享文案...")
-                Log.d("ShareTripViewModel", "=== [主流程] 阶段 D: 最终生成 ===")
-
-                val durationText = buildDurationText(state.trip)
-                val finalResult = finalGenerator.generate(
+                // ========== Step 5: 构建语义摘要 ==========
+                updateStage(CaptionGenerationStage.BUILDING_SUMMARY, "正在整理旅行摘要...")
+                val semanticSummary = promptInputAssembler.buildSemanticSummary(
                     visualSummary = visualSummary,
                     filteredTexts = filteredTexts,
-                    tripTitle = inputContext.tripTitle,
-                    durationText = durationText,
+                    inputContext = inputContext
+                )
+                Log.d(TAG, "[Step 5] 语义摘要构建完成: 备注数=${semanticSummary.selectedMemoryNotes.size}")
+
+                // ========== Step 6: 生成最终文案 ==========
+                updateStage(CaptionGenerationStage.GENERATING_CAPTION, "正在生成分享文案...")
+                val rawResult = finalGenerator.generate(
+                    semanticSummary = semanticSummary,
                     style = state.currentCaptionStyle
                 )
+                Log.d(TAG, "[Step 6] 文案生成完成: success=${rawResult.generationSuccess}")
 
-                Log.d("ShareTripViewModel", "最终生成完成: success=${finalResult.generationSuccess}")
+                // ========== Step 7: 结果清洗 ==========
+                updateStage(CaptionGenerationStage.CLEANING_RESULT, "正在优化文案格式...")
+                val finalResult = captionResultCleaner.clean(rawResult)
+                Log.d(TAG, "[Step 7] 结果清洗完成")
 
                 // ========== 处理结果 ==========
                 if (finalResult.generationSuccess) {
@@ -329,9 +356,16 @@ class ShareTripViewModel(
                         it.copy(
                             isGeneratingCaption = false,
                             currentStage = CaptionGenerationStage.SUCCESS,
+                            captionResult = finalResult,
                             captionOptions = displayCaptions,
                             selectedCaption = displayCaptions.firstOrNull(),
-                            showCaptionDialog = true
+                            showCaptionDialog = true,
+                            // 编辑相关
+                            editableCaptionTitle = finalResult.title,
+                            editableCaptionBody = finalResult.body,
+                            editableCaptionTags = finalResult.tags,
+                            originalCaptionResult = finalResult,
+                            isEditing = false
                         )
                     }
                 } else {
@@ -346,8 +380,10 @@ class ShareTripViewModel(
                     }
                 }
 
+                Log.d(TAG, "=== 7 步流水线完成 ===")
+
             } catch (e: Exception) {
-                Log.e("ShareTripViewModel", "生成文案失败", e)
+                Log.e(TAG, "生成文案失败", e)
                 updateStage(CaptionGenerationStage.ERROR, "生成失败: ${e.message}")
 
                 _uiState.update {
@@ -365,31 +401,12 @@ class ShareTripViewModel(
      * 更新生成阶段
      */
     private fun updateStage(stage: CaptionGenerationStage, message: String) {
-        Log.d("ShareTripViewModel", "[阶段] ${stage.name}: $message")
+        Log.d(TAG, "[阶段] ${stage.name}: $message")
         _uiState.update {
             it.copy(
                 currentStage = stage,
                 stageMessage = message
             )
-        }
-    }
-
-    /**
-     * 构建时长文本
-     */
-    private fun buildDurationText(trip: TripEntity?): String {
-        if (trip == null || trip.startTime <= 0) return ""
-
-        val effectiveEndTime = trip.endTime ?: System.currentTimeMillis()
-        val diff = if (effectiveEndTime > trip.startTime) effectiveEndTime - trip.startTime else 0L
-        val hours = diff / (1000 * 60 * 60)
-        val days = hours / 24
-        val remainHours = hours % 24
-
-        return when {
-            days > 0 -> "${days}天${if (remainHours > 0) "${remainHours}小时" else ""}"
-            hours > 0 -> "${hours}小时"
-            else -> ""
         }
     }
 
@@ -417,41 +434,144 @@ class ShareTripViewModel(
         return captions
     }
 
+    // ========== 编辑功能 ==========
+
     /**
-     * 构建旅程信息文本
+     * 开始编辑文案
      */
-    private fun buildTripInfoText(trip: TripEntity?, nodes: List<MemoryNodeEntity>): String {
-        val sb = StringBuilder()
-
-        if (trip != null) {
-            sb.append("旅行名称：${trip.title}\n")
-
-            // 计算时长
-            val duration = TripCaptionData.fromTrip(trip).duration
-            if (duration.isNotBlank()) {
-                sb.append("时长：$duration\n")
-            }
-        }
-
-        // 收集地点信息
-        val locationNames = nodes
-            .mapNotNull { it.text?.take(30) }
-            .distinct()
-        if (locationNames.isNotEmpty()) {
-            sb.append("地点：${locationNames.take(5).joinToString("、")}\n")
-        }
-
-        // 收集亮点（节点描述）
-        val highlights = nodes
-            .mapNotNull { it.text }
-            .filter { it.isNotBlank() }
-            .take(5)
-        if (highlights.isNotEmpty()) {
-            sb.append("亮点：${highlights.joinToString("、")}\n")
-        }
-
-        return sb.toString()
+    fun startEditing() {
+        _uiState.update { it.copy(isEditing = true) }
     }
+
+    /**
+     * 取消编辑
+     */
+    fun cancelEditing() {
+        val original = _uiState.value.originalCaptionResult
+        _uiState.update {
+            it.copy(
+                isEditing = false,
+                editableCaptionTitle = original?.title ?: "",
+                editableCaptionBody = original?.body ?: "",
+                editableCaptionTags = original?.tags ?: emptyList()
+            )
+        }
+    }
+
+    /**
+     * 更新编辑中的标题
+     */
+    fun updateEditableTitle(title: String) {
+        _uiState.update { it.copy(editableCaptionTitle = title) }
+    }
+
+    /**
+     * 更新编辑中的正文
+     */
+    fun updateEditableBody(body: String) {
+        _uiState.update { it.copy(editableCaptionBody = body) }
+    }
+
+    /**
+     * 更新编辑中的标签
+     */
+    fun updateEditableTags(tags: List<String>) {
+        _uiState.update { it.copy(editableCaptionTags = tags) }
+    }
+
+    /**
+     * 添加标签
+     */
+    fun addTag(tag: String) {
+        val trimmedTag = tag.trim()
+        if (trimmedTag.isBlank()) return
+
+        val currentTags = _uiState.value.editableCaptionTags.toMutableList()
+        val normalizedTag = if (trimmedTag.startsWith("#")) trimmedTag else "#$trimmedTag"
+        if (normalizedTag !in currentTags) {
+            currentTags.add(normalizedTag)
+            _uiState.update { it.copy(editableCaptionTags = currentTags) }
+        }
+    }
+
+    /**
+     * 移除标签
+     */
+    fun removeTag(tag: String) {
+        _uiState.update {
+            it.copy(editableCaptionTags = it.editableCaptionTags.filter { t -> t != tag })
+        }
+    }
+
+    /**
+     * 保存编辑
+     */
+    fun saveEditing() {
+        val state = _uiState.value
+        val editedResult = FinalCaptionResult(
+            title = state.editableCaptionTitle ?: "",
+            body = state.editableCaptionBody ?: "",
+            tags = state.editableCaptionTags,
+            rawContent = state.originalCaptionResult?.rawContent ?: "",
+            generationSuccess = true
+        )
+
+        _uiState.update {
+            it.copy(
+                isEditing = false,
+                captionResult = editedResult,
+                captionOptions = buildDisplayCaptions(editedResult),
+                selectedCaption = buildDisplayCaptions(editedResult).firstOrNull()
+            )
+        }
+    }
+
+    /**
+     * 恢复 AI 原文
+     */
+    fun restoreOriginal() {
+        val original = _uiState.value.originalCaptionResult ?: return
+        _uiState.update {
+            it.copy(
+                editableCaptionTitle = original.title,
+                editableCaptionBody = original.body,
+                editableCaptionTags = original.tags
+            )
+        }
+    }
+
+    /**
+     * 获取完整的分享文案（用于复制）
+     */
+    fun getShareText(): String {
+        val state = _uiState.value
+        val result = state.captionResult ?: return ""
+
+        val title = if (state.isEditing) state.editableCaptionTitle else result.title
+        val body = if (state.isEditing) state.editableCaptionBody else result.body
+        val tags = if (state.isEditing) state.editableCaptionTags else result.tags
+
+        val parts = mutableListOf<String>()
+        if (!title.isNullOrBlank()) parts.add(title)
+        if (!body.isNullOrBlank()) parts.add(body)
+        if (tags.isNotEmpty()) parts.add("\n" + tags.joinToString(" "))
+
+        return parts.joinToString("\n\n")
+    }
+
+    /**
+     * 获取仅正文（用于复制）
+     */
+    fun getBodyText(): String {
+        val state = _uiState.value
+        return if (state.isEditing) {
+            state.editableCaptionBody ?: ""
+        } else {
+            state.captionResult?.body ?: ""
+        }
+    }
+
+    // ========== 其他功能 ==========
 
     /**
      * 重新生成文案
@@ -473,6 +593,10 @@ class ShareTripViewModel(
     fun clearError() {
         _uiState.update { it.copy(error = null) }
     }
+
+    companion object {
+        private const val TAG = "ShareTripViewModel"
+    }
 }
 
 /**
@@ -485,12 +609,24 @@ data class ShareTripUiState(
     val selectedIds: Set<String> = emptySet(),
     val optimizedMap: Map<String, Uri> = emptyMap(),
     val isOptimizing: Boolean = false,
+
+    // 文案相关
     val captionOptions: List<String> = emptyList(),
     val showCaptionDialog: Boolean = false,
     val isGeneratingCaption: Boolean = false,
     val currentCaptionStyle: CaptionStyle = CaptionStyle.DOCUMENTARY,
     val selectedCaption: String? = null,
     val captionError: String? = null,
+    val captionResult: FinalCaptionResult? = null,  // 新增：完整的结果对象
+
+    // 编辑相关
+    val editableCaptionTitle: String? = null,
+    val editableCaptionBody: String? = null,
+    val editableCaptionTags: List<String> = emptyList(),
+    val originalCaptionResult: FinalCaptionResult? = null,  // 保存 AI 原文
+    val isEditing: Boolean = false,
+
+    // 状态
     val currentStage: CaptionGenerationStage = CaptionGenerationStage.IDLE,
     val stageMessage: String = "",
     val error: String? = null

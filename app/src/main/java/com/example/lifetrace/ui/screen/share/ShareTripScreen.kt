@@ -222,6 +222,26 @@ fun ShareTripScreen(
         onRegenerate = { viewModel.regenerateCaptions() },
         onCopy = { caption ->
             copyCaptionToClipboard(context, caption)
+        },
+        // 编辑相关参数
+        captionResult = uiState.captionResult,
+        isEditing = uiState.isEditing,
+        editableTitle = uiState.editableCaptionTitle,
+        editableBody = uiState.editableCaptionBody,
+        editableTags = uiState.editableCaptionTags,
+        onStartEditing = { viewModel.startEditing() },
+        onCancelEditing = { viewModel.cancelEditing() },
+        onSaveEditing = { viewModel.saveEditing() },
+        onRestoreOriginal = { viewModel.restoreOriginal() },
+        onUpdateTitle = { viewModel.updateEditableTitle(it) },
+        onUpdateBody = { viewModel.updateEditableBody(it) },
+        onAddTag = { viewModel.addTag(it) },
+        onRemoveTag = { viewModel.removeTag(it) },
+        onCopyFullText = {
+            copyCaptionToClipboard(context, viewModel.getShareText())
+        },
+        onCopyBodyOnly = {
+            copyCaptionToClipboard(context, viewModel.getBodyText())
         }
     )
 

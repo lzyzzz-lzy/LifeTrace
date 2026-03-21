@@ -25,8 +25,12 @@ data class CandidateTextItem(
     val sourceType: TextSourceType,           // 来源类型
     val sourceMemoryId: Long? = null,         // 来源记忆点ID（标题则为空）
     val text: String,                         // 文字内容
+    val normalizedText: String = text,        // 标准化后的文本
     val timeHint: Long? = null,               // 时间提示
-    val relatedImageCount: Int = 0            // 关联图片数量
+    val relatedImageCount: Int = 0,           // 关联图片数量
+    val charCount: Int = text.length,         // 字符数
+    val isFromSelectedMediaMemory: Boolean = false,  // 是否来自选中图片所在的记忆点
+    val sortWeight: Float = 0f               // 排序权重
 ) {
     /**
      * 从文字创建短预览
@@ -57,7 +61,22 @@ data class TripCaptionInputContext(
     val candidateTexts: List<CandidateTextItem>,
     val candidateImages: List<CandidateImageItem>,
     val style: CaptionStyle,
-    val userExtraNote: String? = null      // 用户手动补充说明
+    val userExtraNote: String? = null,      // 用户手动补充说明
+
+    // 新增：Trip 统计信息
+    val tripDurationText: String? = null,       // 时长文本（如"3天2夜"）
+    val tripDateText: String? = null,           // 日期文本（如"2024年3月15日"）
+    val tripTimeRangeText: String? = null,      // 时间范围文本（如"上午9:00 - 下午5:00"）
+    val memoryNodeCount: Int = 0,               // 记忆点数量
+    val selectedImageCount: Int = 0,             // 选中图片数量
+    val selectedVideoCount: Int = 0,            // 选中视频数量
+
+    // 新增：图片-记忆点关系
+    val imageToMemoryMap: Map<String, Long> = emptyMap(),      // 图片ID -> 记忆点ID
+    val memoryToImageIdsMap: Map<Long, List<String>> = emptyMap(),  // 记忆点ID -> 图片ID列表
+
+    // 新增：调试信息
+    val collectorDebugSummary: String? = null
 ) {
     /**
      * 获取有效文字数量
@@ -65,9 +84,9 @@ data class TripCaptionInputContext(
     fun validTextCount(): Int = candidateTexts.count { it.text.isNotBlank() }
 
     /**
-     * 获取选中图片数量
+     * 计算选中图片数量（动态计算，基于 candidateImages）
      */
-    fun selectedImageCount(): Int = candidateImages.count { it.isSelected }
+    fun calculatedSelectedImageCount(): Int = candidateImages.count { it.isSelected }
 }
 
 // ========== 阶段 B: 文字筛选 ==========
@@ -147,6 +166,103 @@ data class FilteredTextCollection(
         highQuality.isNotEmpty() || mediumQuality.isNotEmpty() || lowQuality.isNotEmpty()
 }
 
+// ========== 新增：规则预筛选中间产物 (Step 2 输出) ==========
+
+/**
+ * 被规则丢弃的文本记录
+ */
+data class RuleDroppedItem(
+    val item: CandidateTextItem,
+    val dropReason: String,
+    val stage: String  // 如 "GARBAGE", "BLACKLIST", "DUPLICATE"
+)
+
+/**
+ * 重复合并追踪记录
+ */
+data class DuplicateMergeTrace(
+    val keptId: String,
+    val mergedIds: List<String>,
+    val reason: String
+)
+
+/**
+ * 规则预筛选结果（Step 2 输出）
+ */
+data class PreFilteredTextCollection(
+    val acceptedStrong: List<CandidateTextItem>,   // 规则判断为高质量
+    val acceptedWeak: List<CandidateTextItem>,     // 规则判断为弱质量
+    val dropped: List<RuleDroppedItem>,            // 被丢弃的项
+    val duplicatesMerged: List<DuplicateMergeTrace> // 重复合并记录
+) {
+    /**
+     * 获取所有接受的文字
+     */
+    fun getAllAccepted(): List<CandidateTextItem> = acceptedStrong + acceptedWeak
+
+    /**
+     * 转换为旧的 FilteredTextCollection 格式（兼容）
+     */
+    fun toFilteredTextCollection(): FilteredTextCollection = FilteredTextCollection(
+        highQuality = acceptedStrong,
+        mediumQuality = acceptedWeak,
+        lowQuality = emptyList(),
+        dropped = dropped.map { it.item },
+        aiFilterEnabled = false
+    )
+
+    /**
+     * 转换为语义筛选集合格式（作为 AI 筛选的输入）
+     */
+    fun toSemanticCollection(): SemanticFilteredTextCollection = SemanticFilteredTextCollection(
+        highQuality = acceptedStrong,
+        mediumQuality = acceptedWeak,
+        lowQuality = emptyList(),
+        dropped = dropped.map { it.item },
+        filterReasonsById = dropped.associate { it.item.id to it.dropReason },
+        keywordsById = emptyMap(),
+        aiFilterEnabled = false,
+        aiFilterSucceeded = false
+    )
+}
+
+/**
+ * AI 语义筛选结果（Step 3 输出）
+ */
+data class SemanticFilteredTextCollection(
+    val highQuality: List<CandidateTextItem>,
+    val mediumQuality: List<CandidateTextItem>,
+    val lowQuality: List<CandidateTextItem>,
+    val dropped: List<CandidateTextItem>,
+    val filterReasonsById: Map<String, String>,
+    val keywordsById: Map<String, List<String>>,
+    val aiFilterEnabled: Boolean,
+    val aiFilterSucceeded: Boolean
+) {
+    /**
+     * 获取所有可用文字
+     */
+    fun getAllAvailable(): List<CandidateTextItem> =
+        highQuality + mediumQuality + lowQuality
+
+    /**
+     * 获取推荐使用的文字
+     */
+    fun getRecommended(): List<CandidateTextItem> =
+        highQuality + mediumQuality
+
+    /**
+     * 转换为旧的 FilteredTextCollection 格式（兼容）
+     */
+    fun toFilteredTextCollection(): FilteredTextCollection = FilteredTextCollection(
+        highQuality = highQuality,
+        mediumQuality = mediumQuality,
+        lowQuality = lowQuality,
+        dropped = dropped,
+        aiFilterEnabled = aiFilterEnabled
+    )
+}
+
 // ========== 阶段 C: 图片分析 ==========
 
 /**
@@ -221,6 +337,8 @@ data class TripSemanticSummary(
     val notableExperiences: List<String>,
     // 结构信息（补）
     val durationText: String?,
+    val dateText: String? = null,
+    val timeRangeText: String? = null,
     val memoryCount: Int,
     val selectedImageCount: Int
 ) {
@@ -288,13 +406,17 @@ data class FinalCaptionResult(
 
 /**
  * 生成阶段枚举（用于 UI 显示）
+ * 扩展为 7 步流水线
  */
 enum class CaptionGenerationStage {
     IDLE("等待开始"),
-    PREPARING("正在整理旅行信息..."),
-    FILTERING_TEXT("正在筛选备注内容..."),
+    PREPARING_INPUT("正在收集旅行信息..."),
+    PRE_FILTERING_TEXT("正在预筛选文字..."),
+    AI_FILTERING_TEXT("正在智能评估文字..."),
     ANALYZING_IMAGES("正在理解图片内容..."),
+    BUILDING_SUMMARY("正在整理旅行摘要..."),
     GENERATING_CAPTION("正在生成分享文案..."),
+    CLEANING_RESULT("正在优化文案格式..."),
     SUCCESS("生成完成!"),
     ERROR("生成失败");
 

@@ -1,5 +1,6 @@
 package com.example.lifetrace.utils
 
+import android.util.Log
 import com.amap.api.maps.model.LatLng
 import com.example.lifetrace.data.database.entity.TrackPointEntity
 import kotlin.math.*
@@ -38,6 +39,47 @@ object TrackSmoothingUtils {
     )
 
     /**
+     * 轨迹平滑策略
+     * 统一控制去抖、RDP、Chaikin 参数
+     */
+    data class TrackSmoothingPolicy(
+        val layer: TrackVisualLayer,
+        val enableJitterFilter: Boolean = true,
+        val jitterMinDistanceMeters: Double = 2.0,
+        val rdpEpsilonMeters: Double? = null,
+        val rdpEpsilonByZoom: ((Float) -> Double)? = null,
+        val enableChaikin: Boolean = false,
+        val chaikinIterations: Int = 1,
+        val minPointsForChaikin: Int = 6,
+        val maxPointsForChaikin: Int = 120,
+        val preserveEndpoints: Boolean = true,
+        val debugLabel: String = "",
+    )
+
+    /**
+     * 轨迹平滑调试信息
+     */
+    data class TrackSmoothingDebugInfo(
+        val rawCount: Int,
+        val filteredCount: Int,
+        val simplifiedCount: Int,
+        val smoothedCount: Int,
+        val zoomLevel: Float,
+        val layer: TrackVisualLayer,
+        val chaikinEnabled: Boolean,
+        val chaikinIterationsApplied: Int,
+        val rdpEpsilonMetersApplied: Double,
+    )
+
+    /**
+     * 轨迹平滑结果
+     */
+    data class TrackSmoothingResult(
+        val points: List<LatLng>,
+        val debugInfo: TrackSmoothingDebugInfo,
+    )
+
+    /**
      * 主入口：对轨迹做去抖 + RDP 简化 + 可选 Chaikin 平滑
      */
     fun processTrack(
@@ -71,6 +113,107 @@ object TrackSmoothingUtils {
         val iterations = if (zoomLevel < 15f) 1 else 2
         return chaikinSmooth(simplified, iterations.coerceIn(1, 3))
     }
+
+    /**
+     * 统一处理入口：根据策略处理轨迹
+     * 返回包含调试信息的结果
+     */
+    fun processTrackWithPolicy(
+        rawPoints: List<TrackPointEntity>,
+        zoomLevel: Float,
+        policy: TrackSmoothingPolicy,
+    ): TrackSmoothingResult {
+        val rawCount = rawPoints.size
+
+        // 1) 去抖（根据策略决定是否启用）
+        val filtered = if (policy.enableJitterFilter) {
+            filterJitter(rawPoints, policy.jitterMinDistanceMeters)
+        } else {
+            rawPoints
+        }
+        val filteredCount = filtered.size
+
+        // 边界检查
+        if (filtered.size <= 1) {
+            return TrackSmoothingResult(
+                points = filtered.map { LatLng(it.latitude, it.longitude) },
+                debugInfo = TrackSmoothingDebugInfo(
+                    rawCount = rawCount,
+                    filteredCount = filteredCount,
+                    simplifiedCount = filteredCount,
+                    smoothedCount = filteredCount,
+                    zoomLevel = zoomLevel,
+                    layer = policy.layer,
+                    chaikinEnabled = false,
+                    chaikinIterationsApplied = 0,
+                    rdpEpsilonMetersApplied = 0.0,
+                )
+            )
+        }
+
+        // 2) 转 LatLng
+        val latLngs = filtered.map { LatLng(it.latitude, it.longitude) }
+
+        // 3) RDP epsilon：优先使用策略中的 zoom 映射函数，否则使用固定值或默认映射
+        val epsilonMeters = policy.rdpEpsilonByZoom?.invoke(zoomLevel)
+            ?: policy.rdpEpsilonMeters
+            ?: when {
+                zoomLevel < 13f -> 30.0
+                zoomLevel < 15f -> 15.0
+                zoomLevel < 17f -> 6.0
+                else -> 2.0
+            }
+
+        // 4) RDP 简化
+        val simplified = rdpSimplify(latLngs, epsilonMeters)
+        val simplifiedCount = simplified.size
+
+        // 5) Chaikin 平滑（根据策略和条件决定是否启用）
+        var chaikinEnabled = policy.enableChaikin
+        var iterationsApplied = 0
+        var smoothed = simplified
+
+        if (chaikinEnabled && simplified.size > 2) {
+            // 检查点数是否在允许范围内
+            if (simplified.size < policy.minPointsForChaikin) {
+                chaikinEnabled = false
+                Log.d(TAG, "[${policy.debugLabel}] Chaikin disabled: too few points (${simplified.size} < ${policy.minPointsForChaikin})")
+            } else if (simplified.size > policy.maxPointsForChaikin) {
+                chaikinEnabled = false
+                Log.d(TAG, "[${policy.debugLabel}] Chaikin disabled: too many points (${simplified.size} > ${policy.maxPointsForChaikin})")
+            } else {
+                iterationsApplied = policy.chaikinIterations.coerceIn(1, 3)
+                smoothed = chaikinSmooth(simplified, iterationsApplied)
+            }
+        }
+
+        val smoothedCount = smoothed.size
+
+        // 6) 输出调试日志
+        Log.d(TAG, """
+            [${policy.debugLabel}] zoom=$zoomLevel layer=${policy.layer}
+            raw=$rawCount -> filtered=$filteredCount -> simplified=$simplifiedCount -> smoothed=$smoothedCount
+            Chaikin: $chaikinEnabled (iterations=$iterationsApplied)
+            RDP epsilon: $epsilonMeters m
+        """.trimIndent().replace("\n", " "))
+
+        return TrackSmoothingResult(
+            points = smoothed,
+            debugInfo = TrackSmoothingDebugInfo(
+                rawCount = rawCount,
+                filteredCount = filteredCount,
+                simplifiedCount = simplifiedCount,
+                smoothedCount = smoothedCount,
+                zoomLevel = zoomLevel,
+                layer = policy.layer,
+                chaikinEnabled = chaikinEnabled,
+                chaikinIterationsApplied = iterationsApplied,
+                rdpEpsilonMetersApplied = epsilonMeters,
+            )
+        )
+    }
+
+    private const val TAG = "TrackSmoothing"
 
     /**
      * 过滤 GPS 抖动噪点：相邻点距离小于阈值则丢弃
@@ -302,5 +445,88 @@ object TrackSmoothingUtils {
         val r = 6371000.0
         val dLat = Math.toRadians(lat - lat0)
         return r * dLat
+    }
+}
+
+/**
+ * 轨迹平滑策略工厂
+ * 根据层级和条件提供默认策略
+ */
+object TrackSmoothingPolicyFactory {
+
+    private const val TAG = "TrackSmoothing"
+
+    /**
+     * RECORDING 轨迹策略
+     * - Chaikin 关闭，性能优先
+     * - 去抖开启，2米阈值
+     * - RDP 正常简化
+     */
+    fun forRecording(zoomLevel: Float, pointCount: Int): TrackSmoothingUtils.TrackSmoothingPolicy {
+        return TrackSmoothingUtils.TrackSmoothingPolicy(
+            layer = TrackSmoothingUtils.TrackVisualLayer.RECORDING,
+            enableJitterFilter = true,
+            jitterMinDistanceMeters = 2.0,
+            enableChaikin = false,  // 录制中始终关闭，保证性能
+            chaikinIterations = 0,
+            minPointsForChaikin = 8,
+            maxPointsForChaikin = 80,
+            debugLabel = "RECORDING",
+        )
+    }
+
+    /**
+     * 根据视觉层级获取策略
+     */
+    fun forLayer(
+        layer: TrackSmoothingUtils.TrackVisualLayer,
+        zoomLevel: Float,
+        pointCount: Int
+    ): TrackSmoothingUtils.TrackSmoothingPolicy {
+        return when (layer) {
+            TrackSmoothingUtils.TrackVisualLayer.RECORDING -> forRecording(zoomLevel, pointCount)
+
+            TrackSmoothingUtils.TrackVisualLayer.FOCUSED_TRIP -> TrackSmoothingUtils.TrackSmoothingPolicy(
+                layer = layer,
+                enableJitterFilter = true,
+                jitterMinDistanceMeters = 2.0,
+                enableChaikin = shouldEnableChaikinForFocusedTrip(zoomLevel, pointCount),
+                chaikinIterations = 1,  // 1次迭代，平衡圆润和性能
+                minPointsForChaikin = 6,
+                maxPointsForChaikin = 120,
+                debugLabel = "FOCUSED_TRIP",
+            )
+
+            TrackSmoothingUtils.TrackVisualLayer.BACKGROUND_TRIP -> TrackSmoothingUtils.TrackSmoothingPolicy(
+                layer = layer,
+                enableJitterFilter = true,
+                jitterMinDistanceMeters = 2.0,
+                enableChaikin = false,  // 背景轨迹不开启，降低地图负担
+                chaikinIterations = 0,
+                minPointsForChaikin = 6,
+                maxPointsForChaikin = 120,
+                debugLabel = "BACKGROUND_TRIP",
+            )
+        }
+    }
+
+    /**
+     * 判断 FOCUSED_TRIP 是否应该启用 Chaikin
+     * 条件：
+     * - zoom >= 14（放大到一定程度）
+     * - 点数在 6~120 之间
+     */
+    private fun shouldEnableChaikinForFocusedTrip(zoomLevel: Float, pointCount: Int): Boolean {
+        val zoomOk = zoomLevel >= 14f
+        val pointCountOk = pointCount in 6..120
+
+        if (!zoomOk) {
+            Log.d(TAG, "FOCUSED_TRIP: Chaikin disabled - zoom too low ($zoomLevel < 14)")
+        }
+        if (!pointCountOk) {
+            Log.d(TAG, "FOCUSED_TRIP: Chaikin disabled - point count out of range ($pointCount)")
+        }
+
+        return zoomOk && pointCountOk
     }
 }

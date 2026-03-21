@@ -7,19 +7,18 @@ import com.example.lifetrace.share.model.*
  * 阶段 B: 文字价值筛选服务
  *
  * 职责：
- * 1. B1: 规则预过滤（本地、快速）
- * 2. B2: AI 语义筛选（可选、远程）
- * 3. 输出: 高/中/低价值文字分类
- *
- * 日志 TAG: TextQualityFilter
+ * B1: 规则预过滤（本地、快速）
+ * B2: AI 语义筛选（可选，远程）
+ * B3: 输出: 高/中/低价值文字分类
  */
 class TextQualityFilter(
-    private val aiFilterEnabled: Boolean = false  // 是否启用 AI 筛选
+    private val textDeduplicator: TextDeduplicator = TextDeduplicator,
+    private val aiFilterEnabled: Boolean = false
 ) {
     companion object {
         private const val TAG = "TextQualityFilter"
 
-        // 规则黑名单（明显测试/无意义文本）
+        // ========== 规则黑名单 ==========
         private val BLACKLIST = setOf(
             "test", "测试", "123", "111", "aaa", "abc",
             "哈哈", "哈哈哈", "hehe", "he", "hehehe",
@@ -27,18 +26,18 @@ class TextQualityFilter(
             "xx", "xxx", "???", "..."
         )
 
-        // 极短无信息词（长度很短且不包含关键信息）
+        // ========== 极短无信息词 ==========
         private val LOW_INFO_SHORT_WORDS = setOf(
             "到了", "好看", "不错", "还行", "记录",
             "嗯", "啊", "哦", "好", "行",
             "可以", "ok", "OK", "Ok"
         )
 
-        // 高价值关键词（包含具体信息）
+        // ========== 高价值关键词 ==========
         private val HIGH_VALUE_KEYWORDS = listOf(
             // 时间相关
             "小时", "分钟", "凌晨", "傍晚", "早上", "晚上", "中午", "下午",
-            // 排队/等待
+            // 掃队/等待
             "排队", "等了", "等待",
             // 情感表达
             "开心", "激动", "兴奋", "感动", "惊喜", "震撼", "难忘",
@@ -47,10 +46,72 @@ class TextQualityFilter(
             // 场景描述
             "风景", "景色", "建筑", "海边", "山顶", "街道", "公园", "餐厅", "景点"
         )
+
+        // ========== 垃圾模式 ==========
+        private val GARBAGE_PATTERNS = listOf(
+            Regex("^[\\d\\s]+$"),                          // 纯数字/空格
+            Regex("^[\\p{Punct}\\s]+$"),                     // 纯标点
+            Regex("(.)\\1{5,}"),                             // 重复字符过高（5次以上相同字符）
+            Regex("^[\\p{So}\\p{Po}\\s]*$")                 // 纯表情符号
+        )
     }
 
     /**
-     * 执行文字筛选
+     * 执行文字预筛选（Step 2: 规则预过滤）
+     * @param inputContext 输入上下文
+     * @return 预筛选结果
+     */
+    suspend fun preFilter(inputContext: TripCaptionInputContext): PreFilteredTextCollection {
+        Log.d(TAG, "=== Step 2: 规则预筛选开始 ===")
+        Log.d(TAG, "输入文字数量: ${inputContext.candidateTexts.size}")
+
+        try {
+            val items = inputContext.candidateTexts
+
+            // B1-1: 标准化
+            val normalizedItems = normalizeAll(items)
+            Log.d(TAG, "[B1-1] 标准化完成: ${normalizedItems.size} 项")
+
+            // B1-2: 去重
+            val deduplicatedResult = textDeduplicator.deduplicate(normalizedItems)
+            Log.d(TAG, "[B1-2] 去重完成: 保留 ${deduplicatedResult.deduplicated.size} 项, 合并 ${deduplicatedResult.mergedTraces.size} 组重复")
+
+            // B1-3: 垃圾过滤
+            val garbageFiltered = filterGarbage(deduplicatedResult.deduplicated)
+            Log.d(TAG, "[B1-3] 垃圾过滤完成: 保留 ${garbageFiltered.accepted.size} 项, 丢弃 ${garbageFiltered.dropped.size} 项")
+
+            // B1-4: 质量分级
+            val graded = gradeByQuality(garbageFiltered.accepted)
+            Log.d(TAG, "[B1-4] 质量分级完成: 强 ${graded.strong.size} 项, 弱 ${graded.weak.size} 项")
+
+            val result = PreFilteredTextCollection(
+                acceptedStrong = graded.strong,
+                acceptedWeak = graded.weak,
+                dropped = garbageFiltered.dropped + deduplicatedResult.dropped,
+                duplicatesMerged = deduplicatedResult.mergedTraces
+            )
+
+            Log.d(TAG, "=== Step 2: 规则预筛选完成 ===")
+            Log.d(TAG, "强质量: ${result.acceptedStrong.size}, 弱质量: ${result.acceptedWeak.size}, 丢弃: ${result.dropped.size}")
+
+            return result
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Step 2 规则预筛选失败", e)
+            // 降级：返回空集合
+            return PreFilteredTextCollection(
+                acceptedStrong = emptyList(),
+                acceptedWeak = emptyList(),
+                dropped = inputContext.candidateTexts.map {
+                    RuleDroppedItem(it, "处理失败", "ERROR")
+                },
+                duplicatesMerged = emptyList()
+            )
+        }
+    }
+
+    /**
+     * 执行完整的文字筛选（兼容旧接口）
      * @param inputContext 输入上下文
      * @return 筛选后的文字集合
      */
@@ -59,41 +120,11 @@ class TextQualityFilter(
         Log.d(TAG, "输入文字数量: ${inputContext.candidateTexts.size}")
 
         try {
-            // B1: 规则预过滤
-            val ruleResults = inputContext.candidateTexts.map { item ->
-                applyRuleFilter(item)
-            }
+            // 执行预筛选
+            val preFiltered = preFilter(inputContext)
 
-            logRuleFilterResults(ruleResults)
-
-            // 分组
-            val ruleStrong = ruleResults.filter { it.level == TextQualityLevel.RULE_STRONG }.map { it.item }
-            val ruleWeak = ruleResults.filter { it.level == TextQualityLevel.RULE_WEAK }.map { it.item }
-            val ruleDropped = ruleResults.filter { it.level == TextQualityLevel.RULE_DROPPED }.map { it.item }
-
-            // B2: AI 语义筛选（可选）
-            if (aiFilterEnabled && (ruleStrong.isNotEmpty() || ruleWeak.isNotEmpty())) {
-                Log.d(TAG, "[B2] 开始 AI 语义筛选...")
-                val aiResults = applyAIFilter(ruleStrong + ruleWeak)
-                return buildFinalCollection(ruleStrong, ruleWeak, ruleDropped, aiResults)
-            }
-
-            // 不使用 AI 筛选，直接使用规则结果
-            Log.d(TAG, "[B2] AI 筛选未启用，使用规则结果")
-
-            val result = FilteredTextCollection(
-                highQuality = ruleStrong,
-                mediumQuality = ruleWeak,
-                lowQuality = emptyList(),
-                dropped = ruleDropped,
-                aiFilterEnabled = false
-            )
-
-            Log.d(TAG, "=== 阶段 B: 文字价值筛选完成 ===")
-            Log.d(TAG, "高质量: ${result.highQuality.size}, 中等: ${result.mediumQuality.size}, 低质量: ${result.lowQuality.size}, 丢弃: ${result.dropped.size}")
-
-            return result
-
+            // 转换为旧的 FilteredTextCollection 格式
+            return preFiltered.toFilteredTextCollection()
         } catch (e: Exception) {
             Log.e(TAG, "阶段 B 文字筛选失败", e)
             // 降级：返回空集合
@@ -107,125 +138,130 @@ class TextQualityFilter(
         }
     }
 
+    // ========== 私有方法 ==========
+
     /**
-     * B1: 应用规则过滤
+     * B1-1: 标准化所有文本
      */
-    private fun applyRuleFilter(item: CandidateTextItem): RuleFilterResult {
-        val text = item.text.trim()
+    private fun normalizeAll(items: List<CandidateTextItem>): List<CandidateTextItem> {
+        return items.map { item ->
+            val normalized = normalizeText(item.text)
+            item.copy(
+                text = item.text,              // 保留原文
+                normalizedText = normalized
+            )
+        }
+    }
+
+    /**
+     * 标准化单条文本
+     */
+    private fun normalizeText(text: String?): String {
+        if (text.isNullOrBlank()) return ""
+        return text.trim()
+            .replace(Regex("\\s+"), " ")
+            .replace("\n", " ")
+            .trim()
+    }
+
+    /**
+     * B1-3: 垃圾过滤
+     */
+    private fun filterGarbage(items: List<CandidateTextItem>): GarbageFilterResult {
+        val accepted = mutableListOf<CandidateTextItem>()
+        val dropped = mutableListOf<RuleDroppedItem>()
+
+        items.forEach { item ->
+            val dropReason = checkGarbageRules(item)
+            if (dropReason != null) {
+                dropped.add(RuleDroppedItem(item, dropReason, "GARBAGE"))
+            } else {
+                accepted.add(item)
+            }
+        }
+
+        return GarbageFilterResult(accepted, dropped)
+    }
+
+    /**
+     * 检查垃圾规则
+     * @return 丢弃原因，null 表示不丢弃
+     */
+    private fun checkGarbageRules(item: CandidateTextItem): String? {
+        val text = item.normalizedText
 
         // 1. 空值检查
-        if (text.isBlank()) {
-            return RuleFilterResult(item, TextQualityLevel.RULE_DROPPED, "空文本")
-        }
+        if (text.isBlank()) return "空文本"
 
         // 2. 黑名单检查
-        if (text.lowercase() in BLACKLIST) {
-            return RuleFilterResult(item, TextQualityLevel.RULE_DROPPED, "黑名单词汇")
-        }
+        if (text.lowercase() in BLACKLIST) return "黑名单词汇"
 
         // 3. 极短无信息词检查
-        if (text.length <= 4 && text.lowercase() in LOW_INFO_SHORT_WORDS) {
-            return RuleFilterResult(item, TextQualityLevel.RULE_DROPPED, "极短无信息词")
-        }
+        if (text.length <= 4 && text.lowercase() in LOW_INFO_SHORT_WORDS) return "极短无信息词"
 
         // 4. 纯数字检查
-        if (text.all { it.isDigit() }) {
-            return RuleFilterResult(item, TextQualityLevel.RULE_DROPPED, "纯数字")
+        if (text.all { it.isDigit() }) return "纯数字"
+
+        // 5. 垃圾模式检查
+        for (pattern in GARBAGE_PATTERNS) {
+            if (pattern.matches(text)) {
+                return "匹配垃圾模式: ${pattern.pattern}"
+            }
         }
 
-        // 5. 高价值关键词检查
+        return null
+    }
+
+    /**
+     * B1-4: 按质量分级
+     */
+    private fun gradeByQuality(items: List<CandidateTextItem>): QualityGradeResult {
+        val strong = mutableListOf<CandidateTextItem>()
+        val weak = mutableListOf<CandidateTextItem>()
+
+        items.forEach { item ->
+            val level = evaluateQuality(item)
+            if (level == TextQualityLevel.RULE_STRONG) {
+                strong.add(item)
+            } else {
+                weak.add(item)
+            }
+        }
+
+        return QualityGradeResult(strong, weak)
+    }
+
+    /**
+     * 评估单条文本质量
+     */
+    private fun evaluateQuality(item: CandidateTextItem): TextQualityLevel {
+        val text = item.normalizedText
+
+        // 1. 高价值关键词检查
         val hasHighValueKeyword = HIGH_VALUE_KEYWORDS.any { keyword ->
             text.contains(keyword, ignoreCase = true)
         }
-        if (hasHighValueKeyword) {
-            return RuleFilterResult(item, TextQualityLevel.RULE_STRONG, "包含高价值关键词")
-        }
+        if (hasHighValueKeyword) return TextQualityLevel.RULE_STRONG
 
-        // 6. 长度判断
-        if (text.length >= 10) {
-            // 较长的文本可能是高质量
-            return RuleFilterResult(item, TextQualityLevel.RULE_STRONG, "文本长度足够")
-        }
+        // 2. 长度判断
+        if (text.length >= 10) return TextQualityLevel.RULE_STRONG
 
-        // 7. 关联图片数量判断
-        if (item.relatedImageCount > 0) {
-            return RuleFilterResult(item, TextQualityLevel.RULE_WEAK, "关联了图片")
-        }
+        // 3. 关联图片数量判断
+        if (item.relatedImageCount > 0) return TextQualityLevel.RULE_WEAK
 
-        // 8. 默认为弱质量
-        return RuleFilterResult(item, TextQualityLevel.RULE_WEAK, "默认弱质量")
+        // 4. 默认为弱质量
+        return TextQualityLevel.RULE_WEAK
     }
 
-    /**
-     * B2: 应用 AI 语义筛选（占位方法）
-     * TODO: 实现真正的 AI 筛选
-     */
-    private suspend fun applyAIFilter(items: List<CandidateTextItem>): List<AIFilterResult> {
-        // TODO: 调用 AI API 进行语义筛选
-        // 暂时返回空列表
-        return emptyList()
-    }
+    // ========== 内部数据类 ==========
 
-    /**
-     * 记录规则筛选结果
-     */
-    private fun logRuleFilterResults(results: List<RuleFilterResult>) {
-        Log.d(TAG, "[B1] 规则预筛选结果:")
+    private data class GarbageFilterResult(
+        val accepted: List<CandidateTextItem>,
+        val dropped: List<RuleDroppedItem>
+    )
 
-        val grouped = results.groupBy { it.level }
-        grouped.forEach { (level, items) ->
-            val levelName = when (level) {
-                TextQualityLevel.RULE_STRONG -> "高价值"
-                TextQualityLevel.RULE_WEAK -> "弱价值"
-                TextQualityLevel.RULE_DROPPED -> "丢弃"
-            }
-            items.forEach { result ->
-                Log.d(TAG, "  [$levelName] ${result.item.id}: \"${result.item.preview()}\" (${result.reason})")
-            }
-        }
-    }
-
-    /**
-     * 构建最终集合（结合 AI 结果）
-     */
-    private fun buildFinalCollection(
-        ruleStrong: List<CandidateTextItem>,
-        ruleWeak: List<CandidateTextItem>,
-        ruleDropped: List<CandidateTextItem>,
-        aiResults: List<AIFilterResult>
-    ): FilteredTextCollection {
-        if (aiResults.isEmpty()) {
-            return FilteredTextCollection(
-                highQuality = ruleStrong,
-                mediumQuality = ruleWeak,
-                lowQuality = emptyList(),
-                dropped = ruleDropped,
-                aiFilterEnabled = true
-            )
-        }
-
-        // 根据 AI 结果重新分类
-        val highQuality = mutableListOf<CandidateTextItem>()
-        val mediumQuality = mutableListOf<CandidateTextItem>()
-        val lowQuality = mutableListOf<CandidateTextItem>()
-
-        aiResults.forEach { aiResult ->
-            val item = (ruleStrong + ruleWeak).find { it.id == aiResult.id }
-            if (item != null && aiResult.decision == FilterDecision.KEEP) {
-                when (aiResult.scoreLevel) {
-                    ScoreLevel.HIGH -> highQuality.add(item)
-                    ScoreLevel.MEDIUM -> mediumQuality.add(item)
-                    ScoreLevel.LOW -> lowQuality.add(item)
-                }
-            }
-        }
-
-        return FilteredTextCollection(
-            highQuality = highQuality,
-            mediumQuality = mediumQuality,
-            lowQuality = lowQuality,
-            dropped = ruleDropped,
-            aiFilterEnabled = true
-        )
-    }
+    private data class QualityGradeResult(
+        val strong: List<CandidateTextItem>,
+        val weak: List<CandidateTextItem>
+    )
 }

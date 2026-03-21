@@ -7,12 +7,12 @@ import com.example.lifetrace.service.CaptionStyle
 import com.example.lifetrace.share.model.*
 
 /**
- * 阶段 D: 最终文案生成服务
+ * 阶段 D (Step 6): 最终文案生成服务
  *
- * 职责：
- * 1. 构建结构化摘要
+ * 职责收缩后：
+ * 1. 构建结构化 Prompt
  * 2. 调用文本模型生成
- * 3. 结果清洗和展示
+ * 3. 返回原始结果（清洗由 CaptionResultCleaner 负责）
  *
  * 日志 TAG: FinalCaptionGenerator
  */
@@ -25,49 +25,44 @@ class FinalCaptionGenerator(
 
     /**
      * 生成最终文案
-     * @param visualSummary 视觉摘要（主）
-     * @param filteredTexts 筛选后的文字（辅）
-     * @param tripTitle Trip 标题
-     * @param durationText 时长文本
+     * @param semanticSummary 语义摘要（由 PromptInputAssembler 构建）
      * @param style 文案风格
      * @return 最终文案结果
      */
     suspend fun generate(
-        visualSummary: VisualTripSummary?,
-        filteredTexts: FilteredTextCollection?,
-        tripTitle: String?,
-        durationText: String?,
+        semanticSummary: TripSemanticSummary,
         style: CaptionStyle
     ): FinalCaptionResult {
-        Log.d(TAG, "=== 阶段 D: 最终文案生成开始 ===")
+        Log.d(TAG, "=== Step 6: 最终文案生成开始 ===")
 
         try {
-            // 1. 构建结构化摘要
-            val semanticSummary = buildSemanticSummary(
-                visualSummary, filteredTexts, tripTitle, durationText
-            )
-            Log.d(TAG, "[D1] 结构化摘要构建完成")
-            Log.d(TAG, "  视觉摘要: ${visualSummary?.visualThemeSentence}")
-            Log.d(TAG, "  高质量文字: ${filteredTexts?.highQuality?.size}")
-            Log.d(TAG, "  时长: $durationText")
-
-            // 2. 构建最终 Prompt
+            // 1. 构建最终 Prompt
             val prompt = buildFinalPrompt(semanticSummary, style)
-            Log.d(TAG, "[D2] 最终 Prompt 长度: ${prompt.length}")
+            Log.d(TAG, "[D1] 最终 Prompt 长度: ${prompt.length}")
+            Log.d(TAG, "  视觉主题: ${semanticSummary.visualSummary?.visualThemeSentence}")
+            Log.d(TAG, "  高质量文字: ${semanticSummary.selectedMemoryNotes.size} 条")
+            Log.d(TAG, "  关键词: ${semanticSummary.noteKeywords.take(5)}")
 
-            // 3. 调用 API 生成
+            // 2. 调用 API 生成
             val apiResult = api.generateStructuredCaption(
                 tripInfo = prompt,
                 imageSummaries = emptyList(),  // 图片信息已经在 prompt 中
                 stylePrompt = buildStylePrompt(style)
             )
-            Log.d(TAG, "[D3] API 返回: success=${apiResult.success}")
+            Log.d(TAG, "[D2] API 返回: success=${apiResult.success}")
 
-            // 4. 处理结果
-            return processResult(apiResult)
+            // 3. 处理结果（不做清洗，清洗由 CaptionResultCleaner 负责）
+            val result = processResult(apiResult)
+
+            Log.d(TAG, "=== Step 6: 最终文案生成完成 ===")
+            Log.d(TAG, "标题: ${result.title}")
+            Log.d(TAG, "正文: ${result.body.take(50)}...")
+            Log.d(TAG, "标签: ${result.tags.joinToString(" ")}")
+
+            return result
 
         } catch (e: Exception) {
-            Log.e(TAG, "阶段 D 最终生成失败", e)
+            Log.e(TAG, "Step 6 最终生成失败", e)
             return FinalCaptionResult(
                 title = "",
                 body = "",
@@ -77,35 +72,6 @@ class FinalCaptionGenerator(
                 errorMessage = "生成失败: ${e.message}"
             )
         }
-    }
-
-    /**
-     * 构建语义摘要
-     */
-    private fun buildSemanticSummary(
-        visualSummary: VisualTripSummary?,
-        filteredTexts: FilteredTextCollection?,
-        tripTitle: String?,
-        durationText: String?
-    ): TripSemanticSummary {
-        // 提取高质量文字
-        val selectedNotes = filteredTexts?.getRecommended()?.map { it.text } ?: emptyList()
-
-        // 提取关键词
-        val keywords = filteredTexts?.getRecommended()?.flatMap { item ->
-            extractKeywords(item.text)
-        }?.distinct() ?: emptyList()
-
-        return TripSemanticSummary(
-            visualSummary = visualSummary,
-            selectedTripTitle = tripTitle,
-            selectedMemoryNotes = selectedNotes.take(5),
-            noteKeywords = keywords.take(10),
-            notableExperiences = emptyList(),
-            durationText = durationText,
-            memoryCount = filteredTexts?.getAllAvailable()?.size ?: 0,
-            selectedImageCount = visualSummary?.analyzedImageCount ?: 0
-        )
     }
 
     /**
@@ -142,12 +108,34 @@ class FinalCaptionGenerator(
             sb.append("\n")
         }
 
+        // 精彩体验（如果有）
+        if (summary.notableExperiences.isNotEmpty()) {
+            sb.append("【精彩体验】\n")
+            summary.notableExperiences.forEach { experience ->
+                sb.append("- $experience\n")
+            }
+            sb.append("\n")
+        }
+
         // 结构信息（补）
         if (!summary.durationText.isNullOrBlank()) {
             sb.append("【时长】${summary.durationText}\n")
         }
 
+        if (!summary.dateText.isNullOrBlank()) {
+            sb.append("【日期】${summary.dateText}\n")
+        }
+
+        if (!summary.timeRangeText.isNullOrBlank()) {
+            sb.append("【时间段】${summary.timeRangeText}\n")
+        }
+
         sb.append("【图片数量】${summary.selectedImageCount}张\n")
+
+        // 关键词提示
+        if (summary.noteKeywords.isNotEmpty()) {
+            sb.append("【关键词提示】${summary.noteKeywords.take(8).joinToString("、")}\n")
+        }
 
         return sb.toString()
     }
@@ -212,7 +200,7 @@ class FinalCaptionGenerator(
     }
 
     /**
-     * 夋理 API 返回结果
+     * 处理 API 返回结果（不做清洗）
      */
     private fun processResult(apiResult: StructuredCaptionResult): FinalCaptionResult {
         if (!apiResult.success) {
@@ -232,20 +220,11 @@ class FinalCaptionGenerator(
             return extractFromRawContent(apiResult.rawContent)
         }
 
-        // 清洗结果
-        val cleanedTitle = cleanText(caption.title)
-        val cleanedBody = cleanText(caption.content)
-        val cleanedTags = caption.tags.map { cleanTag(it) }
-
-        Log.d(TAG, "=== 阶段 D: 最终文案生成完成 ===")
-        Log.d(TAG, "标题: $cleanedTitle")
-        Log.d(TAG, "正文: ${cleanedBody.take(50)}...")
-        Log.d(TAG, "标签: ${cleanedTags.joinToString(" ")}")
-
+        // 直接返回结果，不做清洗（清洗由 CaptionResultCleaner 负责）
         return FinalCaptionResult(
-            title = cleanedTitle,
-            body = cleanedBody,
-            tags = cleanedTags,
+            title = caption.title,
+            body = caption.content,
+            tags = caption.tags,
             rawContent = apiResult.rawContent,
             generationSuccess = true
         )
@@ -276,41 +255,9 @@ class FinalCaptionGenerator(
             body = contentMatch?.groupValues?.get(1)?.trim() ?: rawContent,
             tags = tagsMatch?.groupValues?.get(1)?.split("[,，、#\\s]+".toRegex())
                 ?.filter { it.isNotBlank() }
-                ?.map { if (it.startsWith("#")) it else "#$it" }
                 ?: emptyList(),
             rawContent = rawContent,
             generationSuccess = true
         )
     }
-
-    /**
-     * 清洗文本
-     */
-    private fun cleanText(text: String): String {
-        return text
-            .removePrefix("当然可以")
-            .removePrefix("以下是一段旅行文案")
-            .removePrefix("好的")
-            .removeSurrounding("\"")
-            .trim()
-    }
-
-    /**
-     * 清洗标签
-     */
-    private fun cleanTag(tag: String): String {
-        val cleaned = tag.trim()
-        return if (cleaned.startsWith("#")) cleaned else "#$cleaned"
-    }
-
-    /**
-     * 提取关键词（简单实现）
-     */
-    private fun extractKeywords(text: String): List<String> {
-        // TODO: 可以使用 NLP 或 AI 提取关键词
-        // 暂时返回空列表
-        return emptyList()
-    }
-
-    private fun String?.isNullOrBlank(): Boolean = this == null || this.isBlank()
 }

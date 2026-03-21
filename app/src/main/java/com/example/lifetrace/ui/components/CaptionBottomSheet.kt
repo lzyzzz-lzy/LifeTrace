@@ -9,10 +9,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,14 +24,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.example.lifetrace.service.CaptionStyle
+import com.example.lifetrace.share.model.FinalCaptionResult
 
 /**
- * AI 文案生成底部弹窗
+ * AI 文案生成底部弹窗（支持编辑）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,7 +52,23 @@ fun CaptionBottomSheet(
     onStyleChange: (CaptionStyle) -> Unit,
     onCaptionSelect: (String) -> Unit,
     onRegenerate: () -> Unit,
-    onCopy: (String) -> Unit
+    onCopy: (String) -> Unit,
+    // 新增：编辑相关参数
+    captionResult: FinalCaptionResult? = null,
+    isEditing: Boolean = false,
+    editableTitle: String? = null,
+    editableBody: String? = null,
+    editableTags: List<String> = emptyList(),
+    onStartEditing: () -> Unit = {},
+    onCancelEditing: () -> Unit = {},
+    onSaveEditing: () -> Unit = {},
+    onRestoreOriginal: () -> Unit = {},
+    onUpdateTitle: (String) -> Unit = {},
+    onUpdateBody: (String) -> Unit = {},
+    onAddTag: (String) -> Unit = {},
+    onRemoveTag: (String) -> Unit = {},
+    onCopyFullText: () -> Unit = {},
+    onCopyBodyOnly: () -> Unit = {}
 ) {
     if (!isVisible) return
 
@@ -67,7 +91,7 @@ fun CaptionBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 400.dp, max = 600.dp)
+                .heightIn(min = 400.dp, max = 650.dp)
                 .padding(16.dp)
         ) {
             // 标题栏
@@ -77,11 +101,25 @@ fun CaptionBottomSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "AI 文案生成",
+                    text = if (isEditing) "编辑文案" else "AI 文案生成",
                     style = MaterialTheme.typography.titleLarge
                 )
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = "关闭")
+                Row {
+                    // 编辑/取消按钮
+                    if (captionResult != null && !isLoading) {
+                        if (isEditing) {
+                            TextButton(onClick = onCancelEditing) {
+                                Text("取消")
+                            }
+                        } else {
+                            IconButton(onClick = onStartEditing) {
+                                Icon(Icons.Filled.Edit, contentDescription = "编辑")
+                            }
+                        }
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Filled.Close, contentDescription = "关闭")
+                    }
                 }
             }
 
@@ -120,80 +158,50 @@ fun CaptionBottomSheet(
                 when {
                     isLoading -> {
                         // 加载状态
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            CircularProgressIndicator()
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                text = "正在生成文案...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        LoadingContent()
                     }
 
                     error != null -> {
                         // 错误状态
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                Icons.Filled.ErrorOutline,
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp),
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                text = error,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                                textAlign = TextAlign.Center
-                            )
-                        }
+                        ErrorContent(error = error)
                     }
 
-                    captions.isEmpty() -> {
+                    captions.isEmpty() && captionResult == null -> {
                         // 空状态
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                Icons.Filled.EditNote,
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            Text(
-                                text = "点击生成按钮创建文案",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        EmptyContent()
+                    }
+
+                    isEditing && captionResult != null -> {
+                        // 编辑模式
+                        EditingContent(
+                            title = editableTitle ?: "",
+                            body = editableBody ?: "",
+                            tags = editableTags,
+                            onUpdateTitle = onUpdateTitle,
+                            onUpdateBody = onUpdateBody,
+                            onAddTag = onAddTag,
+                            onRemoveTag = onRemoveTag
+                        )
                     }
 
                     else -> {
-                        // 文案列表
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            items(captions) { caption ->
-                                CaptionItem(
-                                    caption = caption,
-                                    isSelected = caption == selectedCaption,
-                                    onSelect = { onCaptionSelect(caption) },
-                                    onCopy = { onCopy(caption) }
-                                )
-                            }
+                        // 查看模式
+                        if (captionResult != null) {
+                            CaptionResultContent(
+                                result = captionResult,
+                                captions = captions,
+                                selectedCaption = selectedCaption,
+                                onSelect = onCaptionSelect,
+                                onCopy = onCopy
+                            )
+                        } else {
+                            // 兼容旧接口
+                            CaptionListContent(
+                                captions = captions,
+                                selectedCaption = selectedCaption,
+                                onSelect = onCaptionSelect,
+                                onCopy = onCopy
+                            )
                         }
                     }
                 }
@@ -201,19 +209,72 @@ fun CaptionBottomSheet(
 
             Spacer(Modifier.height(16.dp))
 
-            // 底部按钮 - 只有重新生成
-            OutlinedButton(
-                onClick = onRegenerate,
-                enabled = !isLoading,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Filled.Refresh, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("重新生成")
+            // 底部按钮
+            if (isEditing) {
+                // 编辑模式按钮
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onRestoreOriginal,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.RestartAlt, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("恢复原文")
+                    }
+                    Button(
+                        onClick = onSaveEditing,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.Check, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("保存修改")
+                    }
+                }
+            } else {
+                // 查看模式按钮
+                OutlinedButton(
+                    onClick = onRegenerate,
+                    enabled = !isLoading,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("重新生成")
+                }
+            }
+
+            // 复制按钮（非编辑模式且有内容时显示）
+            if (!isEditing && captionResult != null) {
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onCopyBodyOnly,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("复制正文")
+                    }
+                    Button(
+                        onClick = onCopyFullText,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Filled.CopyAll, contentDescription = null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("复制全部")
+                    }
+                }
             }
 
             // 长图海报入口
-            if (selectedCaption != null) {
+            if (!isEditing && selectedCaption != null) {
                 Spacer(Modifier.height(12.dp))
 
                 OutlinedButton(
@@ -229,6 +290,319 @@ fun CaptionBottomSheet(
                 }
             }
         }
+    }
+}
+
+/**
+ * 加载状态内容
+ */
+@Composable
+private fun LoadingContent() {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        CircularProgressIndicator()
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = "正在生成文案...",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * 错误状态内容
+ */
+@Composable
+private fun ErrorContent(error: String) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            Icons.Filled.ErrorOutline,
+            contentDescription = null,
+            modifier = Modifier.size(48.dp),
+            tint = MaterialTheme.colorScheme.error
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = error,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/**
+ * 空状态内容
+ */
+@Composable
+private fun EmptyContent() {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            Icons.Filled.EditNote,
+            contentDescription = null,
+            modifier = Modifier.size(48.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = "点击生成按钮创建文案",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * 编辑模式内容
+ */
+@Composable
+private fun EditingContent(
+    title: String,
+    body: String,
+    tags: List<String>,
+    onUpdateTitle: (String) -> Unit,
+    onUpdateBody: (String) -> Unit,
+    onAddTag: (String) -> Unit,
+    onRemoveTag: (String) -> Unit
+) {
+    var newTagText by remember { mutableStateOf("") }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 标题编辑
+        item {
+            Column {
+                Text(
+                    text = "标题",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = onUpdateTitle,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("输入标题") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                    )
+                )
+            }
+        }
+
+        // 正文编辑
+        item {
+            Column {
+                Text(
+                    text = "正文",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = body,
+                    onValueChange = onUpdateBody,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 200.dp),
+                    placeholder = { Text("输入正文内容") },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                    )
+                )
+            }
+        }
+
+        // 标签编辑
+        item {
+            Column {
+                Text(
+                    text = "标签",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+
+                // 现有标签
+                if (tags.isNotEmpty()) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(tags) { tag ->
+                            InputChip(
+                                selected = false,
+                                onClick = { },
+                                label = { Text(tag) },
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = { onRemoveTag(tag) },
+                                        modifier = Modifier.size(18.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = "删除标签",
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.padding(end = 4.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // 添加新标签
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = newTagText,
+                        onValueChange = { newTagText = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("添加标签") },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        )
+                    )
+                    IconButton(
+                        onClick = {
+                            if (newTagText.isNotBlank()) {
+                                onAddTag(newTagText)
+                                newTagText = ""
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = "添加标签")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 文案结果内容（结构化显示）
+ */
+@Composable
+private fun CaptionResultContent(
+    result: FinalCaptionResult,
+    captions: List<String>,
+    selectedCaption: String?,
+    onSelect: (String) -> Unit,
+    onCopy: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // 标题
+        if (result.title.isNotBlank()) {
+            item {
+                CaptionSection(
+                    label = "标题",
+                    content = result.title
+                )
+            }
+        }
+
+        // 正文
+        if (result.body.isNotBlank()) {
+            item {
+                CaptionSection(
+                    label = "正文",
+                    content = result.body
+                )
+            }
+        }
+
+        // 标签
+        if (result.tags.isNotEmpty()) {
+            item {
+                Column {
+                    Text(
+                        text = "标签",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = result.tags.joinToString(" "),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 文案列表内容（兼容旧接口）
+ */
+@Composable
+private fun CaptionListContent(
+    captions: List<String>,
+    selectedCaption: String?,
+    onSelect: (String) -> Unit,
+    onCopy: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(captions) { caption ->
+            CaptionItem(
+                caption = caption,
+                isSelected = caption == selectedCaption,
+                onSelect = { onSelect(caption) },
+                onCopy = { onCopy(caption) }
+            )
+        }
+    }
+}
+
+/**
+ * 文案分区显示
+ */
+@Composable
+private fun CaptionSection(
+    label: String,
+    content: String
+) {
+    Column {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = content,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 

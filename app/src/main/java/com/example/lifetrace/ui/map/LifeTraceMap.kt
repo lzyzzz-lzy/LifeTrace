@@ -32,6 +32,7 @@ import com.example.lifetrace.state.CameraAction
 import com.example.lifetrace.state.CameraMode
 import com.example.lifetrace.state.MapMode
 import com.example.lifetrace.state.MapUiState
+import com.example.lifetrace.utils.TrackSmoothingPolicyFactory
 import com.example.lifetrace.utils.TrackSmoothingUtils
 import com.example.lifetrace.utils.TrackPolylineRenderer
 
@@ -421,20 +422,28 @@ private fun renderTrackPoints(
     polylineIdToTripId: MutableMap<String, Long>,
     clickablePolylineIds: MutableSet<String>,
     zoomLevel: Float = 15f,
+    policy: TrackSmoothingUtils.TrackSmoothingPolicy? = null,
 ) {
     if (points.size < 2) return
 
-    // ✅ 用新方案：去抖 + RDP 简化（默认不开 Chaikin）
-    val latLngs = TrackSmoothingUtils.processTrack(
+    // 使用传入的 policy 或创建默认 policy
+    val effectivePolicy = policy ?: TrackSmoothingPolicyFactory.forLayer(
+        layer = TrackSmoothingUtils.TrackVisualLayer.BACKGROUND_TRIP,
+        zoomLevel = zoomLevel,
+        pointCount = points.size
+    )
+
+    // ✅ 统一使用 processTrackWithPolicy
+    val result = TrackSmoothingUtils.processTrackWithPolicy(
         rawPoints = points,
         zoomLevel = zoomLevel,
-        enableChaikin = false,
+        policy = effectivePolicy,
     )
-    if (latLngs.size < 2) return
+    if (result.points.size < 2) return
 
     val polyline = map.addPolyline(
         PolylineOptions()
-            .addAll(latLngs)
+            .addAll(result.points)
             .width(width)
             .color(color)
     )
@@ -594,22 +603,25 @@ private fun renderAllTrips(
             TrackSmoothingUtils.TrackVisualLayer.BACKGROUND_TRIP
         }
 
-        val config = TrackSmoothingUtils.getRenderConfigForLayer(
+        // 获取渲染配置
+        val renderConfig = TrackSmoothingUtils.getRenderConfigForLayer(
             zoomLevel = zoomLevel,
             layer = layer
         )
 
-        val latLngs = TrackSmoothingUtils.processTrack(
-            rawPoints = points,
+        // ✅ 获取平滑策略（统一由工厂决定）
+        val smoothingPolicy = TrackSmoothingPolicyFactory.forLayer(
+            layer = layer,
             zoomLevel = zoomLevel,
-            enableChaikin = layer != TrackSmoothingUtils.TrackVisualLayer.RECORDING
+            pointCount = points.size
         )
 
         // 如果调用时指定了 color/width/clickable，则使用它们，否则使用配置中的值
-        val finalColor = color ?: config.mainColor
-        val finalWidth = width ?: config.mainWidth
-        val finalClickable = clickable ?: config.clickable
+        val finalColor = color ?: renderConfig.mainColor
+        val finalWidth = width ?: renderConfig.mainWidth
+        val finalClickable = clickable ?: renderConfig.clickable
 
+        // ✅ 统一调用 renderTrackPoints，传递 policy
         renderTrackPoints(
             map = map,
             points = points,
@@ -620,6 +632,7 @@ private fun renderAllTrips(
             polylineIdToTripId = polylineIdToTripId,
             clickablePolylineIds = clickablePolylineIds,
             zoomLevel = zoomLevel,
+            policy = smoothingPolicy,
         )
     }
 }

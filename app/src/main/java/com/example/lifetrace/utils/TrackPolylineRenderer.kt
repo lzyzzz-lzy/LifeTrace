@@ -1,10 +1,13 @@
 package com.example.lifetrace.utils
 
+import android.util.Log
 import com.amap.api.maps.AMap
 import com.amap.api.maps.model.LatLng
 import com.amap.api.maps.model.Polyline
 import com.amap.api.maps.model.PolylineOptions
 import com.example.lifetrace.data.database.entity.TrackPointEntity
+
+private const val TAG = "TrackPolylineRenderer"
 
 /**
  * 轨迹线渲染器
@@ -28,12 +31,14 @@ class TrackPolylineRenderer(
      * @param points 轨迹点列表
      * @param zoomLevel 缩放级别
      * @param forceRedraw 是否强制重算
+     * @param policy 平滑策略（可选，不传则使用 RECORDING 默认策略）
      */
     fun renderOrUpdate(
         config: TrackSmoothingUtils.TrackRenderConfig,
         points: List<TrackPointEntity>,
         zoomLevel: Float,
         forceRedraw: Boolean = false,
+        policy: TrackSmoothingUtils.TrackSmoothingPolicy? = null,
     ) {
         if (points.size < 2) {
             clear()
@@ -49,27 +54,36 @@ class TrackPolylineRenderer(
 
         if (!needsRecompute) return
 
-        // 1) 计算（去抖 + 简化 + 可选平滑）
-        val latLngs = TrackSmoothingUtils.processTrack(
-            rawPoints = points,
+        // 使用传入的 policy 或创建 RECORDING 默认策略
+        val effectivePolicy = policy ?: TrackSmoothingPolicyFactory.forRecording(
             zoomLevel = zoomLevel,
-            enableChaikin = config.enableChaikin
+            pointCount = points.size
         )
 
-        if (latLngs.size < 2) {
+        // 1) 统一使用 processTrackWithPolicy
+        val result = TrackSmoothingUtils.processTrackWithPolicy(
+            rawPoints = points,
+            zoomLevel = zoomLevel,
+            policy = effectivePolicy,
+        )
+
+        if (result.points.size < 2) {
             clear()
             return
         }
 
+        // 输出调试日志
+        Log.d(TAG, "renderOrUpdate: ${result.debugInfo}")
+
         // 2) 更新或创建 polyline（优先 setPoints，避免 remove/add 闪烁）
         if (outlinePolyline == null || mainPolyline == null) {
-            createPolylines(config, latLngs)
+            createPolylines(config, result.points)
         } else {
-            val updated = tryUpdatePolylines(config, latLngs)
+            val updated = tryUpdatePolylines(config, result.points)
             if (!updated) {
                 // 某些版本不支持 setPoints/修改属性，退化为重建
                 clear()
-                createPolylines(config, latLngs)
+                createPolylines(config, result.points)
             }
         }
 

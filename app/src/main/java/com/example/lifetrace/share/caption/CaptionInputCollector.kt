@@ -11,30 +11,27 @@ import com.example.lifetrace.data.database.repository.MemoryAttachmentRepository
 import com.example.lifetrace.data.database.repository.MemoryNodeRepository
 import com.example.lifetrace.data.database.repository.TripRepository
 import com.example.lifetrace.service.CaptionStyle
-import com.example.lifetrace.share.model.CandidateImageItem
-import com.example.lifetrace.share.model.CandidateTextItem
-import com.example.lifetrace.share.model.TextSourceType
-import com.example.lifetrace.share.model.TripCaptionInputContext
+import com.example.lifetrace.share.model.*
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 /**
- * 阶段 A: 输入收集与标准化服务
+ * 阶段 A (Step 1): 输入收集服务
  *
  * 职责：
  * 1. 收集 Trip 基础信息
- * 2. 收集记忆点备注
- * 3. 收集用户选中的图片
- * 4. 数据清洗和标准化
- *
- * 日志 TAG: CaptionInputCollector
+ * 2. 收集记忆点和附件
+ * 3. 构建候选文字列表
+ * 4. 构建候选图片列表
+ * 5. 构建 Trip 统计
+ * 6. 输出标准化的 TripCaptionInputContext
  */
 class CaptionInputCollector(
     private val context: Context,
     private val tripRepository: TripRepository,
     private val memoryNodeRepository: MemoryNodeRepository,
-    private val attachmentRepository: MemoryAttachmentRepository
+    private val attachmentRepository: MemoryAttachmentRepository,
+    private val tripStatsBuilder: TripStatsBuilder = TripStatsBuilder
 ) {
     companion object {
         private const val TAG = "CaptionInputCollector"
@@ -52,47 +49,90 @@ class CaptionInputCollector(
         selectedItemIds: Set<String>,
         style: CaptionStyle
     ): TripCaptionInputContext {
-        Log.d(TAG, "=== 阶段 A: 输入收集开始 ===")
-        Log.d(TAG, "tripId: $tripId, selectedItems: ${selectedItemIds.size}  style: ${style.displayName}")
+        Log.d(TAG, "=== Step 1: 输入收集开始 ===")
+        Log.d(TAG, "tripId: $tripId, selectedItems: ${selectedItemIds.size}, style: ${style.displayName}")
 
         try {
             // 1. 收集 Trip 基础信息
             val trip = tripRepository.getTripById(tripId)
-            Log.d(TAG, "[Trip] title=${trip?.title} startTime=${trip?.startTime}")
+                ?: throw IllegalStateException("Trip not found: $tripId")
+            Log.d(TAG, "[Trip] title=${trip.title}, startTime=${trip.startTime}")
 
-            // 2. 收集记忆点和附件
+            // 2. 收集记忆点
             val nodes = memoryNodeRepository.getMemoryNodesForTrip(tripId)
             Log.d(TAG, "[记忆点] 数量: ${nodes.size}")
 
-            // 3. 构建候选文字列表
-            val candidateTexts = buildCandidateTexts(trip, nodes)
+            // 3. 收集所有附件（用于构建图片-记忆点映射）
+            val allAttachments = mutableListOf<MemoryAttachmentEntity>()
+            val memoryToAttachmentsMap = mutableMapOf<Long, MutableList<MemoryAttachmentEntity>>()
+            nodes.forEach { node ->
+                val attachments = try {
+                    attachmentRepository.getAttachmentsForNode(node.id)
+                } catch (e: Exception) {
+                    emptyList()
+                }
+                if (attachments.isNotEmpty()) {
+                    memoryToAttachmentsMap[node.id] = attachments.toMutableList()
+                    allAttachments.addAll(attachments)
+                }
+            }
+            Log.d(TAG, "[附件] 总数: ${allAttachments.size}")
+
+            // 4. 构建候选文字列表
+            val candidateTexts = buildCandidateTexts(trip, nodes, memoryToAttachmentsMap)
             Log.d(TAG, "[候选文字] 数量: ${candidateTexts.size}")
             candidateTexts.forEach { item ->
                 Log.d(TAG, "  - ${item.sourceType.name}: \"${item.preview()}\"")
             }
 
-            // 4. 构建候选图片列表
-            val candidateImages = buildCandidateImages(nodes, selectedItemIds)
+            // 5. 构建候选图片列表
+            val candidateImages = buildCandidateImages(nodes, selectedItemIds, memoryToAttachmentsMap)
             Log.d(TAG, "[候选图片] 数量: ${candidateImages.size}")
 
-            // 5. 构建上下文
-            val context = TripCaptionInputContext(
+            // 6. 构建 Trip 统计
+            val stats = tripStatsBuilder.build(trip, nodes, candidateImages)
+            Log.d(TAG, "[Trip统计] duration: ${stats.durationText}, 日期: ${stats.dateText}, 时间范围: ${stats.timeRangeText}")
+            Log.d(TAG, "[Trip统计] 记忆点: ${stats.memoryNodeCount}, 图片: ${stats.selectedImageCount}")
+
+            // 7. 构建图片-记忆点映射
+            val imageToMemoryMap = mutableMapOf<String, Long>()
+            val memoryToImageIdsMap = mutableMapOf<Long, MutableList<String>>()
+            candidateImages.forEach { image ->
+                val memoryId = image.memoryId
+                if (memoryId != null) {
+                    imageToMemoryMap[image.id] = memoryId
+                    memoryToImageIdsMap.getOrPut(memoryId) { mutableListOf() }.add(image.id)
+                }
+            }
+            Log.d(TAG, "[映射] 图片->记忆点: ${imageToMemoryMap.size} 个, 记忆点->图片: ${memoryToImageIdsMap.size} 个")
+
+            // 8. 构建最终上下文
+            val resultContext = TripCaptionInputContext(
                 tripId = tripId,
-                tripTitle = trip?.title,
-                tripStartTime = trip?.startTime ?: 0L,
-                tripEndTime = trip?.endTime,
+                tripTitle = trip.title,
+                tripStartTime = trip.startTime,
+                tripEndTime = trip.endTime,
                 candidateTexts = candidateTexts,
                 candidateImages = candidateImages,
-                style = style
+                style = style,
+                tripDurationText = stats.durationText,
+                tripDateText = stats.dateText,
+                tripTimeRangeText = stats.timeRangeText,
+                memoryNodeCount = stats.memoryNodeCount,
+                selectedImageCount = candidateImages.size,
+                selectedVideoCount = stats.selectedVideoCount,
+                imageToMemoryMap = imageToMemoryMap,
+                memoryToImageIdsMap = memoryToImageIdsMap,
+                collectorDebugSummary = buildDebugSummary(trip, nodes, candidateTexts, candidateImages, stats)
             )
 
-            Log.d(TAG, "=== 阶段 A: 输入收集完成 ===")
-            Log.d(TAG, "有效文字: ${context.validTextCount()}, 选中图片: ${context.selectedImageCount()}")
+            Log.d(TAG, "=== Step 1: 输入收集完成 ===")
+            Log.d(TAG, "有效文字: ${resultContext.validTextCount()}, 选中图片: ${resultContext.selectedImageCount}")
 
-            return context
+            return resultContext
 
         } catch (e: Exception) {
-            Log.e(TAG, "阶段 A 输入收集失败", e)
+            Log.e(TAG, "Step 1 输入收集失败", e)
             throw e
         }
     }
@@ -101,37 +141,45 @@ class CaptionInputCollector(
      * 构建候选文字列表
      */
     private fun buildCandidateTexts(
-        trip: TripEntity?,
-        nodes: List<MemoryNodeEntity>
+        trip: TripEntity,
+        nodes: List<MemoryNodeEntity>,
+        memoryToAttachmentsMap: Map<Long, List<MemoryAttachmentEntity>>
     ): List<CandidateTextItem> {
         val texts = mutableListOf<CandidateTextItem>()
 
-        // 添加 Trip 标题
-        if (trip != null && trip.title.isNotBlank()) {
+        // 1. 添加 Trip 标题
+        if (trip.title.isNotBlank()) {
             texts.add(
                 CandidateTextItem(
                     id = "trip_title_${trip.tripId}",
                     sourceType = TextSourceType.TRIP_TITLE,
                     text = trip.title.trim(),
+                    normalizedText = normalizeText(trip.title),
                     timeHint = trip.startTime
                 )
             )
         }
 
-        // 添加记忆点备注
+        // 2. 添加记忆点备注
         nodes.forEach { node ->
             if (!node.text.isNullOrBlank()) {
-                // 标准化文本
                 val normalizedText = normalizeText(node.text)
                 if (normalizedText.isNotBlank()) {
+                    // 计算关联图片数量
+                    val relatedImageCount = memoryToAttachmentsMap[node.id]
+                        ?.count { it.type == AttachmentType.PHOTO } ?: 0
+
                     texts.add(
                         CandidateTextItem(
                             id = "memory_note_${node.id}",
                             sourceType = TextSourceType.MEMORY_NOTE,
                             sourceMemoryId = node.id,
-                            text = normalizedText,
+                            text = node.text.trim(),
+                            normalizedText = normalizedText,
                             timeHint = node.timestamp,
-                            relatedImageCount = 0 // 将在后面异步填充
+                            relatedImageCount = relatedImageCount,
+                            isFromSelectedMediaMemory = true,
+                            sortWeight = 0.5f
                         )
                     )
                 }
@@ -144,19 +192,15 @@ class CaptionInputCollector(
     /**
      * 构建候选图片列表
      */
-    private suspend fun buildCandidateImages(
+    private fun buildCandidateImages(
         nodes: List<MemoryNodeEntity>,
-        selectedItemIds: Set<String>
+        selectedItemIds: Set<String>,
+        memoryToAttachmentsMap: Map<Long, List<MemoryAttachmentEntity>>
     ): List<CandidateImageItem> {
         val images = mutableListOf<CandidateImageItem>()
 
         nodes.forEach { node ->
-            val attachments = try {
-                attachmentRepository.getAttachmentsForNode(node.id)
-            } catch (e: Exception) {
-                emptyList()
-            }
-
+            val attachments = memoryToAttachmentsMap[node.id] ?: emptyList()
             attachments
                 .filter { it.type == AttachmentType.PHOTO }
                 .filter { "${it.id}" in selectedItemIds }
@@ -179,31 +223,38 @@ class CaptionInputCollector(
 
     /**
      * 标准化文本
-     * - trim 首尾空格
-     * - 压缩连续空格
-     * - 去掉纯换行
      */
     private fun normalizeText(text: String?): String {
-        // let 会自动处理空值，且 lambda 内的 text 自动为非空
-        return text?.let {
-            it.trim()                          // 去首尾空格
-                .replace(Regex("\\s+"), " ")   // 压缩连续空白为单空格
-                .replace("\n", " ")             // 换行转空格
-                .trim()
-        } ?: "" // 若 text 为 null/空白，直接返回空字符串
+        if (text.isNullOrBlank()) return ""
+        return text.trim()
+            .replace(Regex("\\s+"), " ")
+            .replace("\n", " ")
+            .trim()
     }
 
     /**
-     * 格式化时间（用于调试）
+     * 构建调试摘要
      */
-    private fun formatTime(timestamp: Long?): String {
-        if (timestamp == null || timestamp <= 0) return "N/A"
-        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-        return sdf.format(Date(timestamp))
+    private fun buildDebugSummary(
+        trip: TripEntity,
+        nodes: List<MemoryNodeEntity>,
+        texts: List<CandidateTextItem>,
+        images: List<CandidateImageItem>,
+        stats: TripStatsBuilder.TripStats
+    ): String {
+        val sb = StringBuilder()
+        sb.append("=== 输入收集调试信息 ===\n")
+        sb.append("Trip: ${trip.title ?: "无标题"}\n")
+        sb.append("记忆点: ${nodes.size} 个\n")
+        sb.append("附件: ${stats.totalAttachmentCount} 个\n")
+        sb.append("选中图片: ${stats.selectedImageCount} 张\n")
+        texts.forEach { text ->
+            sb.append("  文字: [${text.sourceType.name}] \"${text.preview()}\" (关联图片: ${text.relatedImageCount})\n")
+        }
+        sb.append("\n图片: ${images.size} 张\n")
+        images.forEach { image ->
+            sb.append("  - [${image.memoryId ?: "无"}] ${image.uri}\n")
+        }
+        return sb.toString()
     }
 }
-
-/**
- * String 扩展函数
- */
-private fun String?.isNullOrBlank(): Boolean = this == null || this.isBlank()
