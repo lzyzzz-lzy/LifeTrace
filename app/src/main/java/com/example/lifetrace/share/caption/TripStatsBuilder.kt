@@ -1,6 +1,8 @@
 package com.example.lifetrace.share.caption
 
 import android.util.Log
+import com.example.lifetrace.data.database.entity.AttachmentType
+import com.example.lifetrace.data.database.entity.MemoryAttachmentEntity
 import com.example.lifetrace.data.database.entity.MemoryNodeEntity
 import com.example.lifetrace.data.database.entity.TripEntity
 import com.example.lifetrace.share.model.CandidateImageItem
@@ -35,21 +37,23 @@ object TripStatsBuilder {
      * @param trip Trip 实体
      * @param memoryNodes 所有记忆点
      * @param candidateImages 候选图片列表
+     * @param allAttachments 所有附件列表
      * @return Trip 统计结果
      */
     fun build(
         trip: TripEntity,
         memoryNodes: List<MemoryNodeEntity>,
-        candidateImages: List<CandidateImageItem>
+        candidateImages: List<CandidateImageItem>,
+        allAttachments: List<MemoryAttachmentEntity>
     ): TripStats {
         val memoryNodeCount = memoryNodes.size
         val selectedImageCount = candidateImages.size
 
-        // 计算视频数量（暂时为0，可根据实际需求调整）
-        val selectedVideoCount = 0
+        // 真实计算视频数量
+        val selectedVideoCount = allAttachments.count { it.type == AttachmentType.VIDEO }
 
-        // 总附件数量（暂时等于选中图片数）
-        val totalAttachmentCount = selectedImageCount
+        // 真实计算总附件数量
+        val totalAttachmentCount = allAttachments.size
 
         // 计算时长文本
         val durationText = buildDurationText(trip.startTime, trip.endTime)
@@ -60,7 +64,7 @@ object TripStatsBuilder {
         // 计算时间范围文本
         val timeRangeText = buildTimeRangeText(trip.startTime, trip.endTime)
 
-        Log.d(TAG, "TripStats 构建: memoryNodes=$memoryNodeCount, images=$selectedImageCount, duration=$durationText, date=$dateText, timeRange=$timeRangeText")
+        Log.d(TAG, "TripStats 构建: memoryNodes=$memoryNodeCount, images=$selectedImageCount, videos=$selectedVideoCount, totalAttachments=$totalAttachmentCount, duration=$durationText")
 
         return TripStats(
             durationText = durationText,

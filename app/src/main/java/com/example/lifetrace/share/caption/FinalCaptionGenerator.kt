@@ -43,11 +43,12 @@ class FinalCaptionGenerator(
             Log.d(TAG, "  高质量文字: ${semanticSummary.selectedMemoryNotes.size} 条")
             Log.d(TAG, "  关键词: ${semanticSummary.noteKeywords.take(5)}")
 
-            // 2. 调用 API 生成
+            // 2. 调用 API 生成（传递真实风格）
             val apiResult = api.generateStructuredCaption(
                 tripInfo = prompt,
                 imageSummaries = emptyList(),  // 图片信息已经在 prompt 中
-                stylePrompt = buildStylePrompt(style)
+                stylePrompt = buildStylePrompt(style),
+                style = style  // 传递真实风格用于解析
             )
             Log.d(TAG, "[D2] API 返回: success=${apiResult.success}")
 

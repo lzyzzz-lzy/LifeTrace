@@ -116,7 +116,7 @@ class TextSemanticRanker(
     // ========== 私有方法 ==========
 
     /**
-     * 构建 AI 筛选 Prompt
+     * 构建 AI 筛选 Prompt（使用稳定 ID 映射）
      */
     private fun buildAIFilterPrompt(
         items: List<CandidateTextItem>,
@@ -131,26 +131,42 @@ class TextSemanticRanker(
             sb.append("旅行标题：$tripTitle\n\n")
         }
 
-        sb.append("请对以下文字进行质量评估，判断是否适合用于生成分享文案：\n\n")
+        sb.append("请对以下文字进行质量评估，判断是否适合用于生成分享文案。\n")
+        sb.append("输入格式为 JSON 数组，请返回相同格式的 JSON 数组，保持 id 不变。\n\n")
 
+        // 构建 JSON 格式的输入
+        sb.append("候选文本：\n[\n")
         items.forEachIndexed { index, item ->
-            sb.append("${index + 1}. \"${item.text}\"\n")
+            sb.append("  {\n")
+            sb.append("    \"id\": \"${item.id}\",\n")
+            sb.append("    \"sourceType\": \"${item.sourceType.name}\",\n")
+            sb.append("    \"text\": \"${item.text.replace("\"", "\\\"").replace("\n", "\\n")}\",\n")
+            sb.append("    \"relatedSelectedImageCount\": ${item.relatedSelectedImageCount},\n")
+            sb.append("    \"isFromSelectedMediaMemory\": ${item.isFromSelectedMediaMemory}\n")
+            sb.append("  }")
+            if (index < items.size - 1) sb.append(",")
+            sb.append("\n")
         }
+        sb.append("]\n\n")
 
         sb.append("""
-请返回 JSON 数组格式，每条文字的评估结果包含：
-- id: 文字序号（从1开始）
-- decision: "KEEP"（保留）或 "DROP"（丢弃）
-- scoreLevel: "HIGH"（高质量）、"MEDIUM"（中等）或 "LOW"（低质量）
-- reason: 简短理由
-- keywords: 提取的关键词（数组）
+请返回 JSON 数组格式，每条文字的评估结果必须包含相同的 id：
+[
+  {
+    "id": "原文本的id",
+    "decision": "KEEP" 或 "DROP",
+    "scoreLevel": "HIGH"、"MEDIUM" 或 "LOW",
+    "reason": "简短理由",
+    "keywords": ["关键词1", "关键词2"]
+  }
+]
 
 评估标准：
-- 保留：包含具体的时间、地点、事件、情感描述
-- 丢弃：过于笼统、无信息量、重复、与旅行无关
-- 高质量：有具体内容，可用于文案主题
-- 中等：有一定信息量，可作为补充
-- 低质量：信息量较少
+- KEEP: 包含具体的时间、地点、事件、情感描述
+- DROP: 过于笼统、无信息量、重复、与旅行无关
+- HIGH: 有具体内容，可用于文案主题
+- MEDIUM: 有一定信息量，可作为补充
+- LOW: 信息量较少
 
 只返回 JSON 数组，不要其他文字。
 """.trimIndent())
@@ -159,7 +175,7 @@ class TextSemanticRanker(
     }
 
     /**
-     * 解析 AI 筛选结果
+     * 解析 AI 筛选结果（使用稳定 ID）
      */
     private fun parseAIFilterResult(response: String): List<AIFilterResult> {
         try {
@@ -176,9 +192,14 @@ class TextSemanticRanker(
 
             for (i in 0 until jsonArray.length()) {
                 val jsonItem = jsonArray.getJSONObject(i)
+                val id = jsonItem.optString("id", null)
+                if (id.isNullOrBlank()) {
+                    Log.w(TAG, "AI 返回项缺少 id，跳过: $jsonItem")
+                    continue
+                }
                 results.add(
                     AIFilterResult(
-                        id = jsonItem.optInt("id", i + 1).toString(),
+                        id = id,  // 使用真实 id
                         decision = when (jsonItem.optString("decision", "KEEP").uppercase()) {
                             "KEEP" -> FilterDecision.KEEP
                             else -> FilterDecision.DROP
@@ -230,13 +251,14 @@ class TextSemanticRanker(
     }
 
     /**
-     * 应用 AI 筛选结果
+     * 应用 AI 筛选结果（使用稳定 ID 映射）
      */
     private fun applyAIFilterResults(
         preFiltered: PreFilteredTextCollection,
         aiResults: List<AIFilterResult>
     ): SemanticFilteredTextCollection {
         val allItems = preFiltered.getAllAccepted()
+        // 使用真实 id 作为 key
         val resultMap = aiResults.associateBy { it.id }
 
         val highQuality = mutableListOf<CandidateTextItem>()
@@ -246,11 +268,13 @@ class TextSemanticRanker(
         val filterReasonsById = mutableMapOf<String, String>()
         val keywordsById = mutableMapOf<String, List<String>>()
 
-        allItems.forEachIndexed { index, item ->
-            val aiResult = resultMap[(index + 1).toString()]
+        allItems.forEach { item ->
+            // 使用真实 item.id 查找 AI 结果
+            val aiResult = resultMap[item.id]
 
             if (aiResult == null) {
                 // 没有对应的 AI 结果，保留原分类
+                Log.d(TAG, "未找到 AI 结果: ${item.id}，保留原分类")
                 if (item in preFiltered.acceptedStrong) {
                     highQuality.add(item)
                 } else {
@@ -263,13 +287,23 @@ class TextSemanticRanker(
 
                 when (aiResult.decision) {
                     FilterDecision.DROP -> {
+                        Log.d(TAG, "AI 丢弃: ${item.id} - ${aiResult.reason}")
                         dropped.add(item)
                     }
                     FilterDecision.KEEP -> {
                         when (aiResult.scoreLevel) {
-                            ScoreLevel.HIGH -> highQuality.add(item)
-                            ScoreLevel.MEDIUM -> mediumQuality.add(item)
-                            ScoreLevel.LOW -> lowQuality.add(item)
+                            ScoreLevel.HIGH -> {
+                                Log.d(TAG, "AI 高质量: ${item.id}")
+                                highQuality.add(item)
+                            }
+                            ScoreLevel.MEDIUM -> {
+                                Log.d(TAG, "AI 中等: ${item.id}")
+                                mediumQuality.add(item)
+                            }
+                            ScoreLevel.LOW -> {
+                                Log.d(TAG, "AI 低质量: ${item.id}")
+                                lowQuality.add(item)
+                            }
                         }
                     }
                 }

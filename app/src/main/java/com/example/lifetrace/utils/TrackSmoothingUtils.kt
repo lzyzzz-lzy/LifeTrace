@@ -34,7 +34,9 @@ object TrackSmoothingUtils {
         val outlineColor: Int,
         val mainWidth: Float,
         val outlineWidth: Float,
+        @Deprecated("平滑由 TrackSmoothingPolicy 控制，此字段仅为兼容保留")
         val enableChaikin: Boolean,
+        @Deprecated("平滑由 TrackSmoothingPolicy 控制，此字段仅为兼容保留")
         val chaikinIterations: Int,
     )
 
@@ -81,7 +83,20 @@ object TrackSmoothingUtils {
 
     /**
      * 主入口：对轨迹做去抖 + RDP 简化 + 可选 Chaikin 平滑
+     *
+     * @deprecated 请使用 processTrackWithPolicy(...) 配合 TrackSmoothingPolicyFactory
+     * @param rawPoints 原始轨迹点
+     * @param zoomLevel 地图缩放级别
+     * @param enableChaikin 是否启用 Chaikin 平滑
+     * @return 平滑后的点列表
      */
+    @Deprecated(
+        message = "请使用 processTrackWithPolicy(...) 配合 TrackSmoothingPolicyFactory",
+        replaceWith = ReplaceWith(
+            "processTrackWithPolicy(rawPoints, zoomLevel, TrackSmoothingPolicyFactory.forLayer(TrackVisualLayer.FOCUSED_TRIP, zoomLevel, rawPoints.size)).points",
+            "com.example.lifetrace.utils.TrackSmoothingPolicyFactory"
+        )
+    )
     fun processTrack(
         rawPoints: List<TrackPointEntity>,
         zoomLevel: Float,

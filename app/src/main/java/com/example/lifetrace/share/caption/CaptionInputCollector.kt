@@ -78,23 +78,34 @@ class CaptionInputCollector(
             }
             Log.d(TAG, "[附件] 总数: ${allAttachments.size}")
 
-            // 4. 构建候选文字列表
-            val candidateTexts = buildCandidateTexts(trip, nodes, memoryToAttachmentsMap)
+            // 4. 计算选中的记忆点 ID 集合（用于正确设置 isFromSelectedMediaMemory）
+            val selectedMemoryIds: Set<Long> = allAttachments
+                .filter { "${it.id}" in selectedItemIds }
+                .mapNotNull { attachment ->
+                    memoryToAttachmentsMap.entries.find { (_, attachments) ->
+                        attachment in attachments
+                    }?.key
+                }
+                .toSet()
+            Log.d(TAG, "[选中记忆点] 数量: ${selectedMemoryIds.size}")
+
+            // 5. 构建候选文字列表
+            val candidateTexts = buildCandidateTexts(trip, nodes, memoryToAttachmentsMap, selectedItemIds, selectedMemoryIds)
             Log.d(TAG, "[候选文字] 数量: ${candidateTexts.size}")
             candidateTexts.forEach { item ->
-                Log.d(TAG, "  - ${item.sourceType.name}: \"${item.preview()}\"")
+                Log.d(TAG, "  - ${item.sourceType.name}: \"${item.preview()}\" (选中图:${item.relatedSelectedImageCount}/${item.relatedImageCount})")
             }
 
-            // 5. 构建候选图片列表
-            val candidateImages = buildCandidateImages(nodes, selectedItemIds, memoryToAttachmentsMap)
+            // 6. 构建候选图片列表
+            val candidateImages = buildCandidateImages(nodes, selectedItemIds, memoryToAttachmentsMap, selectedMemoryIds)
             Log.d(TAG, "[候选图片] 数量: ${candidateImages.size}")
 
-            // 6. 构建 Trip 统计
-            val stats = tripStatsBuilder.build(trip, nodes, candidateImages)
+            // 7. 构建 Trip 统计
+            val stats = tripStatsBuilder.build(trip, nodes, candidateImages, allAttachments)
             Log.d(TAG, "[Trip统计] duration: ${stats.durationText}, 日期: ${stats.dateText}, 时间范围: ${stats.timeRangeText}")
             Log.d(TAG, "[Trip统计] 记忆点: ${stats.memoryNodeCount}, 图片: ${stats.selectedImageCount}")
 
-            // 7. 构建图片-记忆点映射
+            // 8. 构建图片-记忆点映射
             val imageToMemoryMap = mutableMapOf<String, Long>()
             val memoryToImageIdsMap = mutableMapOf<Long, MutableList<String>>()
             candidateImages.forEach { image ->
@@ -106,7 +117,7 @@ class CaptionInputCollector(
             }
             Log.d(TAG, "[映射] 图片->记忆点: ${imageToMemoryMap.size} 个, 记忆点->图片: ${memoryToImageIdsMap.size} 个")
 
-            // 8. 构建最终上下文
+            // 9. 构建最终上下文
             val resultContext = TripCaptionInputContext(
                 tripId = tripId,
                 tripTitle = trip.title,
@@ -143,7 +154,9 @@ class CaptionInputCollector(
     private fun buildCandidateTexts(
         trip: TripEntity,
         nodes: List<MemoryNodeEntity>,
-        memoryToAttachmentsMap: Map<Long, List<MemoryAttachmentEntity>>
+        memoryToAttachmentsMap: Map<Long, List<MemoryAttachmentEntity>>,
+        selectedItemIds: Set<String>,
+        selectedMemoryIds: Set<Long>
     ): List<CandidateTextItem> {
         val texts = mutableListOf<CandidateTextItem>()
 
@@ -165,9 +178,17 @@ class CaptionInputCollector(
             if (!node.text.isNullOrBlank()) {
                 val normalizedText = normalizeText(node.text)
                 if (normalizedText.isNotBlank()) {
-                    // 计算关联图片数量
-                    val relatedImageCount = memoryToAttachmentsMap[node.id]
-                        ?.count { it.type == AttachmentType.PHOTO } ?: 0
+                    val nodeAttachments = memoryToAttachmentsMap[node.id] ?: emptyList()
+
+                    // 计算关联图片数量（该记忆点所有图片）
+                    val relatedImageCount = nodeAttachments.count { it.type == AttachmentType.PHOTO }
+
+                    // 计算关联选中图片数量（用户选中的图片）
+                    val relatedSelectedImageCount = nodeAttachments
+                        .count { it.type == AttachmentType.PHOTO && "${it.id}" in selectedItemIds }
+
+                    // 判断是否来自选中图片所在的记忆点
+                    val isFromSelectedMediaMemory = node.id in selectedMemoryIds
 
                     texts.add(
                         CandidateTextItem(
@@ -178,8 +199,9 @@ class CaptionInputCollector(
                             normalizedText = normalizedText,
                             timeHint = node.timestamp,
                             relatedImageCount = relatedImageCount,
-                            isFromSelectedMediaMemory = true,
-                            sortWeight = 0.5f
+                            relatedSelectedImageCount = relatedSelectedImageCount,
+                            isFromSelectedMediaMemory = isFromSelectedMediaMemory,
+                            sortWeight = if (isFromSelectedMediaMemory) 0.7f else 0.5f
                         )
                     )
                 }
@@ -195,12 +217,16 @@ class CaptionInputCollector(
     private fun buildCandidateImages(
         nodes: List<MemoryNodeEntity>,
         selectedItemIds: Set<String>,
-        memoryToAttachmentsMap: Map<Long, List<MemoryAttachmentEntity>>
+        memoryToAttachmentsMap: Map<Long, List<MemoryAttachmentEntity>>,
+        selectedMemoryIds: Set<Long>
     ): List<CandidateImageItem> {
         val images = mutableListOf<CandidateImageItem>()
 
         nodes.forEach { node ->
             val attachments = memoryToAttachmentsMap[node.id] ?: emptyList()
+            val memoryTextPreview = node.text?.take(50)
+            val fromSelectedMemory = node.id in selectedMemoryIds
+
             attachments
                 .filter { it.type == AttachmentType.PHOTO }
                 .filter { "${it.id}" in selectedItemIds }
@@ -211,14 +237,18 @@ class CaptionInputCollector(
                             uri = Uri.parse(attachment.uri),
                             memoryId = node.id,
                             sortTime = node.timestamp,
-                            mimeType = "image/jpeg"
+                            mimeType = "image/jpeg",
+                            memoryTextPreview = memoryTextPreview,
+                            fromSelectedMemory = fromSelectedMemory
                         )
                     )
                 }
         }
 
-        // 按时间排序
-        return images.sortedBy { it.sortTime }
+        // 按时间排序并添加位置序号
+        return images.sortedBy { it.sortTime }.mapIndexed { index, item ->
+            item.copy(position = index)
+        }
     }
 
     /**

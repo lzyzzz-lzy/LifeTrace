@@ -144,11 +144,14 @@ class VolcDoubaoApi(
      * 生成结构化文案（带图片分析）
      * @param tripInfo 旅程信息文本
      * @param imageSummaries 图片分析结果列表
+     * @param stylePrompt 风格提示
+     * @param style 文案风格（用于结构化解析）
      */
     suspend fun generateStructuredCaption(
         tripInfo: String,
         imageSummaries: List<ImageAnalysisResult>,
-        stylePrompt: String = STRUCTURED_CAPTION_PROMPT
+        stylePrompt: String = STRUCTURED_CAPTION_PROMPT,
+        style: com.example.lifetrace.service.CaptionStyle = com.example.lifetrace.service.CaptionStyle.DOCUMENTARY
     ): StructuredCaptionResult = withContext(Dispatchers.IO) {
         try {
             // 构建包含图片分析的提示
@@ -172,10 +175,10 @@ class VolcDoubaoApi(
                 )
             }
 
-            // 解析结构化文案
+            // 解析结构化文案（使用真实风格）
             val structuredCaption = StructuredCaption.fromContent(
                 response.rawContent,
-                com.example.lifetrace.service.CaptionStyle.DOCUMENTARY
+                style
             )
 
             StructuredCaptionResult(

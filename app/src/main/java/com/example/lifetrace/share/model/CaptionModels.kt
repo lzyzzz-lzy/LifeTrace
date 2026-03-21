@@ -27,7 +27,8 @@ data class CandidateTextItem(
     val text: String,                         // 文字内容
     val normalizedText: String = text,        // 标准化后的文本
     val timeHint: Long? = null,               // 时间提示
-    val relatedImageCount: Int = 0,           // 关联图片数量
+    val relatedImageCount: Int = 0,           // 关联图片数量（该记忆点所有图片）
+    val relatedSelectedImageCount: Int = 0,   // 关联选中图片数量（用户选中的图片）
     val charCount: Int = text.length,         // 字符数
     val isFromSelectedMediaMemory: Boolean = false,  // 是否来自选中图片所在的记忆点
     val sortWeight: Float = 0f               // 排序权重
@@ -47,7 +48,11 @@ data class CandidateImageItem(
     val memoryId: Long? = null,               // 所属记忆点ID
     val sortTime: Long,                       // 排序时间
     val mimeType: String = "image/jpeg",      // MIME 类型
-    val isSelected: Boolean = true            // 是否被选中用于分析
+    val isSelected: Boolean = true,           // 是否被选中用于分析
+    // 新增：代表图评分字段
+    val memoryTextPreview: String? = null,    // 所属记忆点的文本预览
+    val fromSelectedMemory: Boolean = false,  // 是否来自有选中图片的记忆点
+    val position: Int = -1                    // 在时间线中的位置序号
 )
 
 /**

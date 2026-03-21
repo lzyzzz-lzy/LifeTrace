@@ -64,8 +64,9 @@ class ShareTripViewModel(
     }
     private val captionResultCleaner: CaptionResultCleaner by lazy { CaptionResultCleaner }
 
-    // AI 筛选开关
-    private val aiFilterEnabled: Boolean = false  // 暂时关闭，后续可配置
+    // AI 筛选开关 - 已启用，配合失败降级逻辑
+    // 当 API 已配置且候选文本数量 >= 4 时启用
+    private val aiFilterEnabled: Boolean = true
 
     private val _uiState = MutableStateFlow(ShareTripUiState())
     val uiState: StateFlow<ShareTripUiState> = _uiState
@@ -308,14 +309,31 @@ class ShareTripViewModel(
                 val preFiltered = textQualityFilter.preFilter(inputContext)
                 Log.d(TAG, "[Step 2] 规则预筛选完成: 强=${preFiltered.acceptedStrong.size}, 弱=${preFiltered.acceptedWeak.size}")
 
-                // ========== Step 3: AI 文本筛选（可选） ==========
+                // ========== Step 3: AI 文本筛选 ==========
+                Log.d(TAG, "[Step 3] aiFilterEnabled=$aiFilterEnabled, API已配置=${captionService.isApiConfigured()}, 候选文本数=${preFiltered.getAllAccepted().size}")
+
                 val filteredTexts: SemanticFilteredTextCollection
-                if (aiFilterEnabled && preFiltered.getAllAccepted().size > 3) {
+                val shouldUseAIFilter = aiFilterEnabled &&
+                    captionService.isApiConfigured() &&
+                    preFiltered.getAllAccepted().size >= 4
+
+                if (shouldUseAIFilter) {
                     updateStage(CaptionGenerationStage.AI_FILTERING_TEXT, "正在智能评估文字...")
+                    Log.d(TAG, "[Step 3] 开始 AI 文本筛选，送入文本数=${preFiltered.getAllAccepted().size}")
+
                     filteredTexts = textSemanticRanker.rank(preFiltered, inputContext.tripTitle, state.currentCaptionStyle)
-                    Log.d(TAG, "[Step 3] AI 筛选完成: 高=${filteredTexts.highQuality.size}, 中=${filteredTexts.mediumQuality.size}")
+
+                    Log.d(TAG, "[Step 3] AI 筛选完成:")
+                    Log.d(TAG, "  - 高质量=${filteredTexts.highQuality.size}, 中等=${filteredTexts.mediumQuality.size}, 低质量=${filteredTexts.lowQuality.size}")
+                    Log.d(TAG, "  - AI 启用=${filteredTexts.aiFilterEnabled}, AI 成功=${filteredTexts.aiFilterSucceeded}")
                 } else {
-                    Log.d(TAG, "[Step 3] 跳过 AI 筛选（未启用或文本数量较少）")
+                    val skipReason = when {
+                        !aiFilterEnabled -> "功能未启用"
+                        !captionService.isApiConfigured() -> "API 未配置"
+                        preFiltered.getAllAccepted().size < 4 -> "文本数量较少(${preFiltered.getAllAccepted().size}<4)"
+                        else -> "未知原因"
+                    }
+                    Log.d(TAG, "[Step 3] 跳过 AI 筛选: $skipReason")
                     filteredTexts = preFiltered.toSemanticCollection()
                 }
 

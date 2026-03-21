@@ -68,7 +68,7 @@ object CaptionResultCleaner {
     }
 
     /**
-     * 清洗标题
+     * 清洗标题（增强版）
      */
     private fun cleanTitle(title: String): String {
         var cleaned = title.trim()
@@ -80,22 +80,46 @@ object CaptionResultCleaner {
             }
         }
 
+        // 移除 markdown 标题符号 ##, ###
+        cleaned = cleaned.removePrefix("###").removePrefix("##").removePrefix("#").trim()
+
+        // 移除 【标题】 前缀
+        cleaned = cleaned.removePrefix("【标题】").removePrefix("【标题:").removePrefix("【标题：").trim()
+        if (cleaned.startsWith("【") && cleaned.contains("】")) {
+            val endIndex = cleaned.indexOf("】")
+            val potentialTitle = cleaned.substring(endIndex + 1).trim()
+            if (potentialTitle.isNotBlank()) {
+                cleaned = potentialTitle
+            }
+        }
+
+        // 移除前导列表号：①②③④⑤ 或 1. 2. 3.
+        cleaned = cleaned.replace(Regex("^[①②③④⑤⑥⑦⑧⑨⑩][.、:：]?\\s*"), "")
+        cleaned = cleaned.replace(Regex("^[1-9][0-9]?[.、:：]\\s*"), "")
+
         // 移除引号包裹
         cleaned = cleaned.removeSurrounding("\"")
         cleaned = cleaned.removeSurrounding("\"")
         cleaned = cleaned.removeSurrounding("'")
 
-        // 移除 markdown 标题符号
-        cleaned = cleaned.removePrefix("#").trim()
-
         // 合并多余空格
         cleaned = cleaned.replace(Regex("\\s+"), " ")
+
+        // 若标题超过 30 字，按标点截断
+        if (cleaned.length > 30) {
+            val truncateIndex = cleaned.indexOfAny(charArrayOf('。', '！', '？', '，', '、'), 10)
+            if (truncateIndex > 10 && truncateIndex < 30) {
+                cleaned = cleaned.substring(0, truncateIndex)
+            } else {
+                cleaned = cleaned.take(30) + "..."
+            }
+        }
 
         return cleaned.trim()
     }
 
     /**
-     * 清洗正文
+     * 清洗正文（增强版）
      */
     private fun cleanBody(body: String): String {
         var cleaned = body.trim()
@@ -107,18 +131,40 @@ object CaptionResultCleaner {
             }
         }
 
+        // 移除 【正文】 前缀
+        cleaned = cleaned.removePrefix("【正文】").removePrefix("【正文:").removePrefix("【正文：").trim()
+        if (cleaned.startsWith("【") && cleaned.contains("】") && cleaned.indexOf("】") < 10) {
+            val endIndex = cleaned.indexOf("】")
+            val potentialBody = cleaned.substring(endIndex + 1).trim()
+            if (potentialBody.isNotBlank()) {
+                cleaned = potentialBody
+            }
+        }
+
         // 移除 markdown 代码块标记
         cleaned = cleaned.removePrefix("```").trimStart()
         cleaned = cleaned.removeSuffix("```").trimEnd()
+
+        // 移除 markdown 列表符号 *, -, •
+        cleaned = cleaned.lines().joinToString("\n") { line ->
+            line.trim()
+                .removePrefix("* ").removePrefix("- ").removePrefix("• ")
+                .removePrefix("*").removePrefix("-").removePrefix("•")
+                .trim()
+        }
+
+        // 移除 markdown heading ##
+        cleaned = cleaned.replace(Regex("^#+\\s*"), "")
+        cleaned = cleaned.replace(Regex("\\n#+\\s*"), "\n")
 
         // 移除引号包裹
         cleaned = cleaned.removeSurrounding("\"")
         cleaned = cleaned.removeSurrounding("\"")
 
-        // 处理换行：合并连续空行为单个换行
+        // 处理换行：合并连续空行为最多两个换行
         cleaned = cleaned.replace(Regex("\\n{3,}"), "\n\n")
 
-        // 处理行内多余空格（但保留中文排版需要的空格）
+        // 处理行内多余空格
         cleaned = cleaned.lines().joinToString("\n") { line ->
             line.trim()
         }
@@ -127,7 +173,7 @@ object CaptionResultCleaner {
     }
 
     /**
-     * 清洗标签
+     * 清洗标签（增强版）
      */
     private fun cleanTags(tags: List<String>): List<String> {
         return tags.map { tag ->
@@ -140,15 +186,20 @@ object CaptionResultCleaner {
                 }
             }
 
+            // 移除 【标签】 前缀
+            cleaned = cleaned.removePrefix("【标签】").removePrefix("【标签:").removePrefix("【标签：").trim()
+
             // 移除标点符号
             cleaned = cleaned.replace(Regex("[,，、。！!？?]"), "")
 
-            // 规范化：确保以 # 开头
-            if (cleaned.isNotEmpty() && !cleaned.startsWith("#")) {
-                cleaned = "#$cleaned"
-            }
+            // 清理多个 # 连写，只保留一个
+            cleaned = cleaned.replace(Regex("^#+"), "")
+            cleaned = if (cleaned.isNotBlank()) "#$cleaned" else ""
 
             cleaned
-        }.filter { it.isNotBlank() && it != "#" }
+        }
+        .filter { it.isNotBlank() && it != "#" && it.length > 1 }
+        .distinct()  // 去重
+        .take(5)     // 限制最多 5 个
     }
 }

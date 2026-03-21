@@ -91,26 +91,92 @@ class ImageSemanticExtractor(
     }
 
     /**
-     * 选择代表图（首/中/尾策略）
+     * 选择代表图（轻量评分策略）
+     *
+     * 策略：
+     * 1. 图片数量 <= 3：全部分析
+     * 2. 图片数量 > 3：基于评分选择，同时保证时间线覆盖
+     *
+     * 评分规则：
+     * - +3: 关联记忆点有非空文本
+     * - +2: 关联记忆点文本长度 >= 10
+     * - +2: 来自有选中图片的记忆点
+     * - +1: 位于时间线起点或终点
      */
     private fun selectRepresentativeImages(images: List<CandidateImageItem>): List<CandidateImageItem> {
         if (images.size <= MAX_ANALYZE_IMAGES) {
             // 图片数量 <= 3，全部分析
+            Log.d(TAG, "[代表图] 图片数量 <= $MAX_ANALYZE_IMAGES，全部分析")
             return images
         }
 
-        // 选择首/中/尾
+        Log.d(TAG, "[代表图] 候选总数=${images.size}，开始评分选择")
+
+        // 计算每张图片的评分
+        val scoredImages = images.map { image ->
+            val score = scoreImageForRepresentation(image, images.size)
+            Log.d(TAG, "  ${image.id}: 评分=$score (text=${image.memoryTextPreview?.take(20)}, fromSelected=${image.fromSelectedMemory}, pos=${image.position})")
+            image to score
+        }.sortedByDescending { it.second }
+
         val result = mutableListOf<CandidateImageItem>()
-        result.add(images.first())  // 首图
+        val selectedIds = mutableSetOf<String>()
 
-        // 中间图
-        val middleIndex = images.size / 2
-        result.add(images[middleIndex])
+        // 1. 固定时间覆盖：首图和尾图（如果评分不是最低的）
+        val firstImage = images.first()
+        val lastImage = images.last()
 
-        // 尾图
-        result.add(images.last())
+        result.add(firstImage)
+        selectedIds.add(firstImage.id)
+        Log.d(TAG, "[代表图] 添加首图: ${firstImage.id}")
 
-        return result
+        if (lastImage.id != firstImage.id) {
+            result.add(lastImage)
+            selectedIds.add(lastImage.id)
+            Log.d(TAG, "[代表图] 添加尾图: ${lastImage.id}")
+        }
+
+        // 2. 从评分排序中选剩余的代表图（跳过已选的）
+        for ((image, score) in scoredImages) {
+            if (result.size >= MAX_ANALYZE_IMAGES) break
+            if (image.id in selectedIds) continue
+
+            result.add(image)
+            selectedIds.add(image.id)
+            Log.d(TAG, "[代表图] 添加高评分图: ${image.id} (评分=$score)")
+        }
+
+        Log.d(TAG, "[代表图] 最终选中: ${result.map { it.id }}")
+        return result.sortedBy { it.sortTime }  // 按时间排序返回
+    }
+
+    /**
+     * 计算图片代表图评分
+     */
+    private fun scoreImageForRepresentation(image: CandidateImageItem, totalImages: Int): Float {
+        var score = 0f
+
+        // +3: 关联记忆点有非空文本
+        if (!image.memoryTextPreview.isNullOrBlank()) {
+            score += 3f
+        }
+
+        // +2: 关联记忆点文本长度 >= 10
+        if ((image.memoryTextPreview?.length ?: 0) >= 10) {
+            score += 2f
+        }
+
+        // +2: 来自有选中图片的记忆点
+        if (image.fromSelectedMemory) {
+            score += 2f
+        }
+
+        // +1: 位于时间线起点或终点
+        if (image.position == 0 || image.position == totalImages - 1) {
+            score += 1f
+        }
+
+        return score
     }
 
     /**
